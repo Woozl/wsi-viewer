@@ -21,7 +21,14 @@ export interface OpenResult {
 
 export type WorkerRequest =
   | { readonly id: number; readonly kind: 'detect'; readonly wasmUrl: string; readonly file: File }
-  | { readonly id: number; readonly kind: 'open'; readonly wasmUrl: string; readonly file: File }
+  | {
+      readonly id: number;
+      readonly kind: 'open';
+      readonly wasmUrl: string;
+      readonly file: File;
+      /** Sibling files to mount, keyed by path relative to the mount point. */
+      readonly companions: ReadonlyMap<string, File>;
+    }
   | {
       readonly id: number;
       readonly kind: 'tile';
@@ -45,6 +52,13 @@ export type WorkerRequest =
       readonly width: number;
       readonly height: number;
     }
+  | {
+      readonly id: number;
+      readonly kind: 'thumbnail';
+      readonly series: number;
+      /** Longest edge of the result, in pixels. */
+      readonly maxSize: number;
+    }
   | { readonly id: number; readonly kind: 'close' };
 
 export type WorkerResponse =
@@ -53,6 +67,12 @@ export type WorkerResponse =
   | { readonly id: number; readonly ok: true; readonly kind: 'open'; readonly value: OpenResult }
   | { readonly id: number; readonly ok: true; readonly kind: 'tile'; readonly value: ImageBitmap | null }
   | { readonly id: number; readonly ok: true; readonly kind: 'region'; readonly value: Uint8Array<ArrayBuffer> }
+  | {
+      readonly id: number;
+      readonly ok: true;
+      readonly kind: 'thumbnail';
+      readonly value: ImageBitmap | null;
+    }
   | { readonly id: number; readonly ok: true; readonly kind: 'close'; readonly value: null };
 
 /** Maps a request kind to the payload its successful response carries. */
@@ -61,5 +81,6 @@ export interface ResultByKind {
   open: OpenResult;
   tile: ImageBitmap | null;
   region: Uint8Array<ArrayBuffer>;
+  thumbnail: ImageBitmap | null;
   close: null;
 }

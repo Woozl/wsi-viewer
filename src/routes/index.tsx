@@ -1,6 +1,13 @@
 import { useCallback, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { FolderOpenIcon, ImageIcon, TriangleAlertIcon, UploadIcon, XIcon } from 'lucide-react';
+import {
+  FolderOpenIcon,
+  ImageIcon,
+  InfoIcon,
+  TriangleAlertIcon,
+  UploadIcon,
+  XIcon,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -9,7 +16,13 @@ import { DirectoryTree } from '@/components/sidebar/directory-tree';
 import { useDirectories } from '@/hooks/use-directories';
 import { useSlideStore } from '@/store/slide-store';
 import { supportsDirectoryPicker } from '@/lib/fs-access';
-import { ACCEPT_ATTRIBUTE, companionHint, isSupportedFile, SUPPORTED_COUNT } from '@/lib/formats';
+import {
+  ACCEPT_ATTRIBUTE,
+  companionHint,
+  isSupportedFile,
+  needsCompanions,
+  SUPPORTED_COUNT,
+} from '@/lib/formats';
 import { cn } from '@/lib/utils';
 
 export const Route = createFileRoute('/')({ component: UploadPage });
@@ -20,11 +33,13 @@ function UploadPage(): React.JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
+  // A format whose data lives in sibling files, picked without them.
+  const [incomplete, setIncomplete] = useState<{ file: File; hint: string } | null>(null);
   const directories = useDirectories();
   const canPickFolders = supportsDirectoryPicker();
 
   const open = useCallback(
-    (file: File): void => {
+    (file: File, companions: ReadonlyMap<string, File> = new Map()): void => {
       if (!isSupportedFile(file.name)) {
         setProblem({
           message:
@@ -34,8 +49,21 @@ function UploadPage(): React.JSX.Element {
         });
         return;
       }
+
+      // Index formats name their image files instead of embedding them. Picking
+      // one through the file input yields the index alone, so the guidance is
+      // surfaced here rather than after a confusing failure to open. Formats
+      // that need nothing extra never see any of this.
+      const hint = companionHint(file.name);
+      if (companions.size === 0 && needsCompanions(file.name) && hint !== null) {
+        setProblem(null);
+        setIncomplete({ file, hint });
+        return;
+      }
+
       setProblem(null);
-      setFile(file);
+      setIncomplete(null);
+      setFile(file, companions);
       void navigate({ to: '/view' });
     },
     [navigate, setFile],
@@ -188,6 +216,53 @@ function UploadPage(): React.JSX.Element {
             }}
           />
         </div>
+
+        {incomplete !== null && (
+          <div
+            role="status"
+            className="w-full max-w-2xl space-y-3 rounded-md border bg-card p-4 text-sm"
+          >
+            <div className="flex items-start gap-2">
+              <InfoIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <div className="space-y-1">
+                <p className="font-medium">
+                  {incomplete.file.name} needs the files stored beside it
+                </p>
+                <p className="text-muted-foreground">{incomplete.hint}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {canPickFolders ? (
+                <Button
+                  size="sm"
+                  onClick={(): void => {
+                    setIncomplete(null);
+                    void directories.add();
+                  }}
+                >
+                  <FolderOpenIcon />
+                  Open the containing folder
+                </Button>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  This browser cannot open folders, so this format needs Chrome or Edge.
+                </p>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={(): void => {
+                  const file = incomplete.file;
+                  setIncomplete(null);
+                  setFile(file);
+                  void navigate({ to: '/view' });
+                }}
+              >
+                Open without them
+              </Button>
+            </div>
+          </div>
+        )}
 
         {problem !== null && (
           <div

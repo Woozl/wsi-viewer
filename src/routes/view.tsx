@@ -21,7 +21,8 @@ function ViewPage(): React.JSX.Element {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const file = useSlideStore((state) => state.file);
-  const { client, query } = useSlide(file);
+  const companions = useSlideStore((state) => state.companions);
+  const { client, query } = useSlide(file, companions);
 
   // Only the first search value is restored into the map; later ones are written
   // by the map itself, so re-reading them would fight the user. A lazy state
@@ -75,7 +76,14 @@ function ViewPage(): React.JSX.Element {
   return (
     <div className="flex h-full">
       <aside className="hidden w-72 shrink-0 border-r md:block" aria-label="Slide details">
-        <MetadataPanel model={query.data.model} fileName={file.name} />
+        {client !== null && (
+          <MetadataPanel
+            model={query.data.model}
+            fileName={file.name}
+            client={client}
+            slideKey={`${file.name}:${String(file.size)}`}
+          />
+        )}
       </aside>
       <div className="relative min-w-0 flex-1">
         <FormatWarning detection={query.data.detection} fileName={file.name} />

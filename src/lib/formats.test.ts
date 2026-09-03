@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { companionHint, extensionOf, isSupportedFile, SUPPORTED_COUNT } from './formats';
+import {
+  companionHint,
+  extensionOf,
+  isSupportedFile,
+  needsCompanions,
+  SUPPORTED_COUNT,
+} from './formats';
 
 describe('extensionOf', () => {
   it('lowercases the extension', () => {
@@ -34,6 +40,18 @@ describe('isSupportedFile', () => {
   it('exposes a non-trivial derived format list', () => {
     // Guards against the generated list silently becoming empty.
     expect(SUPPORTED_COUNT).toBeGreaterThan(100);
+  });
+});
+
+describe('needsCompanions', () => {
+  it('flags index formats that reference sibling files', () => {
+    expect(needsCompanions('study.afi')).toBe(true);
+    expect(needsCompanions('scan.ndpis')).toBe(true);
+  });
+
+  it('is false for self-contained slides, so the extra UI stays hidden', () => {
+    expect(needsCompanions('slide.svs')).toBe(false);
+    expect(needsCompanions('image.ome.tif')).toBe(false);
   });
 });
 

@@ -21,7 +21,10 @@ export function slideKey(file: File): readonly unknown[] {
   return ['slide', file.name, file.size, file.lastModified];
 }
 
-export function useSlide(file: File | null): {
+export function useSlide(
+  file: File | null,
+  companions: ReadonlyMap<string, File> = new Map(),
+): {
   client: SlideClient | null;
   query: UseQueryResult<OpenedSlide>;
 } {
@@ -57,7 +60,7 @@ export function useSlide(file: File | null): {
     retry: false,
     queryFn: async (): Promise<OpenedSlide> => {
       if (file === null || client === null) throw new Error('no slide selected');
-      const { series, candidates, detection } = await client.open(file);
+      const { series, candidates, detection } = await client.open(file, companions);
       return { model: buildSlideModel(series, candidates), detection };
     },
   });

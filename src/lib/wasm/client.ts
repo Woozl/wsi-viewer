@@ -72,9 +72,20 @@ export class SlideClient {
     return response.value;
   }
 
-  /** Opens the slide and returns every series with its tiling. */
-  async open(file: File): Promise<OpenResult> {
-    const response = await this.send({ id: this.nextRequestId(), kind: 'open', wasmUrl: wasmUrl(), file });
+  /**
+   * Opens the slide and returns every series with its tiling.
+   *
+   * `companions` mounts sibling files alongside it, which index formats such as
+   * .afi and .ndpis need in order to reach their pixel data.
+   */
+  async open(file: File, companions: ReadonlyMap<string, File> = new Map()): Promise<OpenResult> {
+    const response = await this.send({
+      id: this.nextRequestId(),
+      kind: 'open',
+      wasmUrl: wasmUrl(),
+      file,
+      companions,
+    });
     if (!response.ok) throw new Error(response.error);
     if (response.kind !== 'open') throw new Error('unexpected response to open');
     return response.value;
@@ -116,6 +127,19 @@ export class SlideClient {
     });
     if (!response.ok) throw new Error(response.error);
     if (response.kind !== 'region') throw new Error('unexpected response to region');
+    return response.value;
+  }
+
+  /** Decoded preview of an associated image such as a label or macro photo. */
+  async thumbnail(series: number, maxSize: number): Promise<ImageBitmap | null> {
+    const response = await this.send({
+      id: this.nextRequestId(),
+      kind: 'thumbnail',
+      series,
+      maxSize,
+    });
+    if (!response.ok) throw new Error(response.error);
+    if (response.kind !== 'thumbnail') throw new Error('unexpected response to thumbnail');
     return response.value;
   }
 

@@ -34,8 +34,12 @@ function compile(url: string): Promise<WebAssembly.Module> {
   return compiled;
 }
 
-async function ensureCore(wasmUrl: string, file: File): Promise<SlideCore> {
-  core ??= await SlideCore.create(await compile(wasmUrl), file);
+async function ensureCore(
+  wasmUrl: string,
+  file: File,
+  companions: ReadonlyMap<string, File> = new Map(),
+): Promise<SlideCore> {
+  core ??= await SlideCore.create(await compile(wasmUrl), file, companions);
   return core;
 }
 
@@ -226,6 +230,33 @@ async function readRegionTile(
   return await createImageBitmap(canvas);
 }
 
+/**
+ * Decodes an entire series and scales it down for the sidebar.
+ *
+ * Only used for associated images — label and macro photographs — which are
+ * small enough to decode whole. Pyramid levels are never read this way.
+ */
+async function readThumbnail(
+  active: SlideCore,
+  series: number,
+  maxSize: number,
+): Promise<ImageBitmap | null> {
+  const info = seriesInfo.find((entry) => entry.series === series);
+  if (info === undefined || info.width === 0 || info.height === 0) return null;
+
+  const handle = handleFor(active, series, 0);
+  const pixels = active.readRegion(handle, 0, 0, 0, info.width, info.height);
+  const image = new ImageData(toRgba(pixels, info, info.width, info.height), info.width, info.height);
+
+  const scale = Math.min(1, maxSize / Math.max(info.width, info.height));
+  if (scale === 1) return await createImageBitmap(image);
+  return await createImageBitmap(image, {
+    resizeWidth: Math.max(1, Math.round(info.width * scale)),
+    resizeHeight: Math.max(1, Math.round(info.height * scale)),
+    resizeQuality: 'high',
+  });
+}
+
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
   const request = event.data;
   void (async (): Promise<void> => {
@@ -242,7 +273,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           return;
         }
         case 'open': {
-          const active = await ensureCore(request.wasmUrl, request.file);
+          const active = await ensureCore(request.wasmUrl, request.file, request.companions);
           // Detection reuses the already-loaded core, so the magic-byte check
           // costs one header read rather than a second worker and compile.
           const detection = await detect(active, request.file);
@@ -296,6 +327,15 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             request.height,
           );
           reply({ id: request.id, ok: true, kind: 'region', value: pixels }, [pixels.buffer]);
+          return;
+        }
+        case 'thumbnail': {
+          if (core === null) throw new Error('no slide is open');
+          const bitmap = await readThumbnail(core, request.series, request.maxSize);
+          reply(
+            { id: request.id, ok: true, kind: 'thumbnail', value: bitmap },
+            bitmap === null ? [] : [bitmap],
+          );
           return;
         }
         case 'close': {

@@ -3,10 +3,15 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import type { SlideModel } from '@/lib/slide';
+import type { SlideClient } from '@/lib/wasm/client';
+import { AssociatedImages } from './associated-images';
 
 interface MetadataPanelProps {
   readonly model: SlideModel;
   readonly fileName: string;
+  readonly client: SlideClient;
+  /** Identifies the slide for per-series preview caching. */
+  readonly slideKey: string;
 }
 
 function formatPixels(value: number): string {
@@ -21,7 +26,12 @@ function describeSize(width: number, height: number): string {
     : `${((width * height) / 1e6).toFixed(0)} megapixels`;
 }
 
-export function MetadataPanel({ model, fileName }: MetadataPanelProps): React.JSX.Element {
+export function MetadataPanel({
+  model,
+  fileName,
+  client,
+  slideKey,
+}: MetadataPanelProps): React.JSX.Element {
   const base = model.series[0];
 
   // Aperio and friends pack a pipe-delimited blob into ImageDescription; the raw
@@ -88,6 +98,17 @@ export function MetadataPanel({ model, fileName }: MetadataPanelProps): React.JS
             ))}
           </ul>
         </section>
+
+        {model.associated.length > 0 && (
+          <>
+            <Separator />
+            <AssociatedImages
+              series={model.associated}
+              client={client}
+              slideKey={slideKey}
+            />
+          </>
+        )}
 
         {entries.length > 0 && (
           <>

@@ -106,3 +106,35 @@ export async function storeDirectories(handles: readonly FileSystemDirectoryHand
   }
   await set(STORE_KEY, [...handles]);
 }
+
+/**
+ * Collects the sibling files an index format needs.
+ *
+ * Formats such as .afi and .ndpis name their image files rather than embedding
+ * them, so the reader opens those by name and they must exist in the guest
+ * filesystem. Everything beside the slide is gathered, plus one companion
+ * subdirectory named after it, which is the convention these formats follow.
+ *
+ * Only called for formats that actually need it: resolving every entry to a
+ * `File` is far too slow for an archive of thousands of slides.
+ */
+export async function collectCompanions(
+  parent: FileSystemDirectoryHandle,
+  slideName: string,
+): Promise<Map<string, File>> {
+  const companions = new Map<string, File>();
+  const stem = slideName.replace(/\.[^.]+$/, '');
+
+  for await (const [name, entry] of parent.entries()) {
+    if (entry.kind === 'file') {
+      if (name !== slideName) companions.set(name, await entry.getFile());
+      continue;
+    }
+    // MIRAX, VSI and friends keep tiles in a folder named after the slide.
+    if (name !== stem && name !== `_${stem}_`) continue;
+    for await (const [childName, child] of entry.entries()) {
+      if (child.kind === 'file') companions.set(`${name}/${childName}`, await child.getFile());
+    }
+  }
+  return companions;
+}

@@ -9,12 +9,14 @@ import {
 } from 'react-aria-components';
 import { ChevronRightIcon, FileIcon, FolderIcon, Loader2Icon } from 'lucide-react';
 import {
+  collectCompanions,
   isDirectoryHandle,
   isFileHandle,
   listDirectory,
   requestPermission,
   type DirectoryEntry,
 } from '@/lib/fs-access';
+import { needsCompanions } from '@/lib/formats';
 import { cn } from '@/lib/utils';
 
 /** A node as the tree renders it, with children resolved so far. */
@@ -24,6 +26,8 @@ interface TreeNode {
   readonly kind: 'file' | 'directory';
   readonly supported: boolean;
   readonly handle: FileSystemDirectoryHandle | FileSystemFileHandle | null;
+  /** Folder this node sits in; needed to gather an index format's siblings. */
+  readonly parent: FileSystemDirectoryHandle | null;
   readonly children: readonly TreeNode[];
   readonly pending: boolean;
 }
@@ -41,6 +45,7 @@ function placeholder(parentId: string): TreeNode {
     kind: 'file',
     supported: false,
     handle: null,
+    parent: null,
     children: [],
     pending: true,
   };
@@ -48,7 +53,7 @@ function placeholder(parentId: string): TreeNode {
 
 interface DirectoryTreeProps {
   readonly roots: readonly FileSystemDirectoryHandle[];
-  readonly onOpenFile: (file: File) => void;
+  readonly onOpenFile: (file: File, companions: ReadonlyMap<string, File>) => void;
 }
 
 export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.JSX.Element {
@@ -57,28 +62,33 @@ export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.
   const [failed, setFailed] = useState<string | null>(null);
 
   const build = useCallback(
-    (entry: DirectoryEntry): TreeNode => {
+    (entry: DirectoryEntry, parent: FileSystemDirectoryHandle | null): TreeNode => {
       const loaded = entries.get(entry.id);
+      const self = isDirectoryHandle(entry.handle) ? entry.handle : parent;
       return {
         id: entry.id,
         name: entry.name,
         kind: entry.kind,
         supported: entry.supported,
         handle: entry.handle,
+        parent,
         pending: false,
         children:
           entry.kind !== 'directory'
             ? []
             : loaded === undefined
               ? [placeholder(entry.id)]
-              : loaded.map(build),
+              : loaded.map((child) => build(child, self)),
       };
     },
     [entries],
   );
 
   const rootNodes: TreeNode[] = roots.map((handle) =>
-    build({ id: handle.name, name: handle.name, kind: 'directory', handle, supported: false }),
+    build(
+      { id: handle.name, name: handle.name, kind: 'directory', handle, supported: false },
+      null,
+    ),
   );
 
   const onExpandedChange = useCallback(
@@ -102,15 +112,24 @@ export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.
 
   const onAction = useCallback(
     (key: Key): void => {
-      const handle = findHandle(rootNodes, String(key))?.handle ?? null;
-      if (handle === null || !isFileHandle(handle)) return;
+      const node = findHandle(rootNodes, String(key));
+      const handle = node?.handle ?? null;
+      if (node === null || handle === null || !isFileHandle(handle)) return;
+      const parent = node.parent;
       void (async (): Promise<void> => {
         try {
           if (!(await requestPermission(handle))) {
             setFailed('Permission to read that file was declined.');
             return;
           }
-          onOpenFile(await handle.getFile());
+          const file = await handle.getFile();
+          // Resolving every sibling to a File is slow, so it is only done for
+          // the index formats that cannot be read without them.
+          const companions =
+            parent !== null && needsCompanions(file.name)
+              ? await collectCompanions(parent, file.name)
+              : new Map<string, File>();
+          onOpenFile(file, companions);
         } catch (error) {
           setFailed(error instanceof Error ? error.message : 'could not open that file');
         }

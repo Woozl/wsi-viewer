@@ -9,7 +9,9 @@
  */
 import {
   ConsoleStdout,
+  Directory,
   File as WasiFile,
+  type Inode,
   OpenFile,
   PreopenDirectory,
   WASI,
@@ -93,10 +95,41 @@ export class SlideCore {
     private readonly guestPath: string,
   ) {}
 
-  static async create(module: WebAssembly.Module, file: File): Promise<SlideCore> {
+  /**
+   * @param companions Sibling files to mount alongside the slide, keyed by path
+   * relative to the mount point. Formats such as .afi and .ndpis are only an
+   * index: the pixel data lives in neighbouring files, and the reader opens them
+   * by name, so they must be present in the guest filesystem too. A path may
+   * contain one `/` to place a file inside a companion subdirectory.
+   */
+  static async create(
+    module: WebAssembly.Module,
+    file: File,
+    companions: ReadonlyMap<string, File> = new Map(),
+  ): Promise<SlideCore> {
     // The original filename is preserved: bioformats detects several formats by
     // extension, so renaming the mounted file changes which reader wins.
-    const contents = new Map([[file.name, new LazyFileInode(file)]]);
+    const contents = new Map<string, Inode>([[file.name, new LazyFileInode(file)]]);
+    const subdirectories = new Map<string, Map<string, Inode>>();
+    for (const [path, companion] of companions) {
+      const slash = path.indexOf('/');
+      if (slash === -1) {
+        if (path !== file.name) contents.set(path, new LazyFileInode(companion));
+        continue;
+      }
+      const directory = path.slice(0, slash);
+      const name = path.slice(slash + 1);
+      if (directory === '' || name === '' || name.includes('/')) continue;
+      let entries = subdirectories.get(directory);
+      if (entries === undefined) {
+        entries = new Map<string, Inode>();
+        subdirectories.set(directory, entries);
+      }
+      entries.set(name, new LazyFileInode(companion));
+    }
+    for (const [name, entries] of subdirectories) {
+      contents.set(name, new Directory(entries));
+    }
     // Descriptors 0-2 must be stdin/stdout/stderr: WASI preopens are discovered
     // by scanning from fd 3, so a preopen placed earlier is invisible to the
     // guest and every path resolution fails with ENOENT before path_open runs.

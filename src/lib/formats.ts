@@ -51,6 +51,11 @@ export function companionHint(fileName: string): string | null {
   return COMPANION_FORMATS.get(extension) ?? null;
 }
 
+/** True when the format stores its pixel data in neighbouring files. */
+export function needsCompanions(fileName: string): boolean {
+  return companionHint(fileName) !== null;
+}
+
 /** `accept` attribute value for the file input. */
 export const ACCEPT_ATTRIBUTE = [...SUPPORTED].map((ext) => `.${ext}`).join(',');
 
