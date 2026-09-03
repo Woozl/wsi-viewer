@@ -4,17 +4,22 @@
 //
 //   node scripts/smoke-wasm.mjs images/image.svs
 
+import { mkdtempSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { WASI } from 'node:wasi';
 
 const input = resolve(process.argv[2] ?? 'images/image.svs');
 const mountPoint = '/slides';
 const guestPath = `${mountPoint}/${basename(input)}`;
 
+// /tmp mirrors what the browser mounts: readers that hand a path to another
+// reader stage bytes there, because std::env::temp_dir() panics on wasm.
+const scratch = mkdtempSync(join(tmpdir(), 'wsi-smoke-'));
 const wasi = new WASI({
   version: 'preview1',
-  preopens: { [mountPoint]: dirname(input) },
+  preopens: { [mountPoint]: dirname(input), '/tmp': scratch },
 });
 
 const module = await WebAssembly.compile(await readFile('public/wasm/wsi_core.wasm'));
@@ -67,17 +72,14 @@ if (handle === 0) {
 console.log(`opened in ${(performance.now() - started).toFixed(0)} ms (handle ${handle})`);
 
 const info = JSON.parse(takeString(api.bf_metadata_json(handle)));
-console.log(`series ${info.series + 1}/${info.series_count}, levels ${info.resolution_count}`);
-console.log(
-  `base ${info.metadata.size_x} x ${info.metadata.size_y}, ` +
-    `${info.metadata.pixel_type}, rgb=${info.metadata.is_rgb}`,
-);
+console.log(`series ${info.series + 1}/${info.seriesCount}, levels ${info.resolutionCount}`);
+console.log(`base ${info.width} x ${info.height}, ${info.pixelType}, rgb=${info.isRgb}`);
 
 const levels = JSON.parse(takeString(api.bf_levels_json(handle)));
 console.log('pyramid:');
 for (const level of levels) console.log(`  L${level.level}: ${level.width} x ${level.height}`);
 
-const keys = Object.keys(info.metadata.series_metadata ?? {});
+const keys = Object.keys(info.metadata ?? {});
 console.log(`series metadata keys: ${keys.length}`);
 console.log(`  sample: ${keys.slice(0, 8).join(', ')}`);
 

@@ -19,6 +19,10 @@ serde_json = "1"
 # Three guard constants are `4 * 1024 * 1024 * 1024`, which is exactly 2^32 and
 # overflows a 32-bit usize at const-eval time. See patches/hdf5-pure-rust-wasm32.patch.
 hdf5-pure-rust = { path = "../vendor/hdf5-pure-rust" }
+# std::env::temp_dir() and std::process::id() both panic on wasm, and several
+# readers use them to stage bytes through a temporary file. See
+# patches/bioformats-wasm-compat.patch.
+bioformats = { path = "../vendor/bioformats" }
 
 # Slide decoding is on the interaction path, so favour speed; `release-size` exists
 # to measure the size/latency trade-off.

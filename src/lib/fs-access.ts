@@ -123,18 +123,33 @@ export async function collectCompanions(
   slideName: string,
 ): Promise<Map<string, File>> {
   const companions = new Map<string, File>();
-  const stem = slideName.replace(/\.[^.]+$/, '');
 
   for await (const [name, entry] of parent.entries()) {
     if (entry.kind === 'file') {
       if (name !== slideName) companions.set(name, await entry.getFile());
       continue;
     }
-    // MIRAX, VSI and friends keep tiles in a folder named after the slide.
-    if (name !== stem && name !== `_${stem}_`) continue;
+    if (!isCompanionDirectoryName(name, slideName)) continue;
     for await (const [childName, child] of entry.entries()) {
       if (child.kind === 'file') companions.set(`${name}/${childName}`, await child.getFile());
     }
   }
   return companions;
+}
+
+/**
+ * Whether `directoryName` looks like the companion folder for `slideName`.
+ *
+ * Vendors disagree on the convention, so all four in circulation are accepted:
+ * Olympus writes `<full filename>.files` (`scan.oif` -> `scan.oif.files`),
+ * others use `<stem>.files`, MIRAX uses the bare `<stem>`, and Olympus VSI
+ * wraps the stem in underscores. Matching is case-insensitive because the
+ * casing is not stable across exports.
+ */
+export function isCompanionDirectoryName(directoryName: string, slideName: string): boolean {
+  const stem = slideName.replace(/\.[^.]+$/, '');
+  const candidates = [`${slideName}.files`, `${stem}.files`, stem, `_${stem}_`];
+  return candidates.some(
+    (candidate) => candidate.toLowerCase() === directoryName.toLowerCase(),
+  );
 }

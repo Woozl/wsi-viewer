@@ -30,6 +30,8 @@ const COMPANION_FORMATS = new Map<string, string>([
   ['xlef', 'Leica XLEF projects reference image folders stored alongside them.'],
   ['vws', 'Leica VWS slides reference image data stored alongside them.'],
   ['lof', 'Leica LOF files are usually part of a multi-file project folder.'],
+  ['oif', 'Olympus OIF images keep their pixel data in a sibling .oif.files folder.'],
+  ['oib', 'Olympus OIB projects may reference data in a sibling folder.'],
 ]);
 
 /** Lowercase extension without the dot, or null when the name has none. */

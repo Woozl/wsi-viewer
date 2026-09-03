@@ -52,8 +52,6 @@ dependencies = [
 [[package]]
 name = "bioformats"
 version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1cf8fe9cd36bc55943dcff7afabe40cc2bcf07a43f3c337af05bc50e8f75532"
 dependencies = [
  "bincode",
  "byteorder",

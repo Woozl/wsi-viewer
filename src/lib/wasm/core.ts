@@ -22,6 +22,9 @@ import { LazyFileInode } from './lazy-file';
 /** Directory the slide is mounted under inside the guest. */
 const MOUNT = '/slides';
 
+/** Scratch directory the patched crate uses in place of the system temp dir. */
+const TEMP_MOUNT = '/tmp';
+
 interface CoreExports {
   readonly memory: WebAssembly.Memory;
   /** WASI reactor entry point; must run before any other export is called. */
@@ -142,6 +145,11 @@ export class SlideCore {
         console.warn(`[wsi-core stderr] ${line}`);
       }),
       new PreopenDirectory(MOUNT, contents),
+      // Writable scratch space. Several readers stage bytes through a temporary
+      // file because they must hand a path to another reader; the patched crate
+      // points those at /tmp rather than std::env::temp_dir(), which panics on
+      // wasm. Nothing here outlives the worker.
+      new PreopenDirectory(TEMP_MOUNT, new Map<string, Inode>()),
     ];
     const instance = new WASI([], [], fds);
     const wasmInstance = await WebAssembly.instantiate(module, {

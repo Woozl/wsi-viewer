@@ -1,0 +1,156 @@
+diff -ru orig/src/common/mod.rs new/src/common/mod.rs
+--- a/src/common/mod.rs	2026-09-03 18:47:02
++++ b/src/common/mod.rs	2026-09-03 18:47:02
+@@ -13,3 +13,34 @@
+ pub mod region;
+ pub mod writer;
+ pub mod xml;
++
++/// Directory for temporary files.
++///
++/// Several readers stage bytes through a temporary file because they must hand
++/// a path to another reader: OIB embeds whole TIFF streams, and `TiffReader`
++/// only accepts a path. `std::env::temp_dir()` panics outright on wasm ("no
++/// filesystem on wasm"), so there this returns `/tmp`, which the host is
++/// expected to mount as a writable directory.
++pub fn temp_dir() -> std::path::PathBuf {
++    if cfg!(target_family = "wasm") {
++        std::path::PathBuf::from("/tmp")
++    } else {
++        // Unreachable on wasm, so the panicking call is compiled but never run.
++        std::env::temp_dir()
++    }
++}
++
++/// A value unique to this process, used only to name temporary files.
++///
++/// `std::process::id()` panics on wasm, where there are no processes. A counter
++/// gives the same uniqueness guarantee within one module instance, which is all
++/// these call sites need.
++pub fn process_id() -> u32 {
++    if cfg!(target_family = "wasm") {
++        use std::sync::atomic::{AtomicU32, Ordering};
++        static NEXT: AtomicU32 = AtomicU32::new(1);
++        NEXT.fetch_add(1, Ordering::Relaxed)
++    } else {
++        std::process::id()
++    }
++}
+diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
+--- a/src/formats/camera2.rs	2026-09-03 18:47:02
++++ b/src/formats/camera2.rs	2026-09-03 18:47:02
+@@ -2289,9 +2289,9 @@
+         drop(stream);
+         drop(comp);
+ 
+-        let tmp = std::env::temp_dir().join(format!(
++        let tmp = crate::common::temp_dir().join(format!(
+             "bioformats_ipw_{}_{}_{}.tif",
+-            std::process::id(),
++            crate::common::process_id(),
+             std::thread::current().name().unwrap_or("thread"),
+             stream_path.replace(['/', '\\', ' '], "_")
+         ));
+diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
+--- a/src/formats/eps.rs	2026-09-03 18:47:02
++++ b/src/formats/eps.rs	2026-09-03 18:47:02
+@@ -52,8 +52,8 @@
+ 
+         // Delegate to the project TiffReader via a temporary file, since it
+         // reads from a path.
+-        let mut tmp = std::env::temp_dir();
+-        tmp.push(format!("bf_eps_preview_{}.tif", std::process::id()));
++        let mut tmp = crate::common::temp_dir();
++        tmp.push(format!("bf_eps_preview_{}.tif", crate::common::process_id()));
+         std::fs::write(&tmp, tiff_bytes).map_err(BioFormatsError::Io)?;
+ 
+         let result = (|| -> Result<(ImageMetadata, Vec<u8>)> {
+diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
+--- a/src/formats/flim2.rs	2026-09-03 18:47:02
++++ b/src/formats/flim2.rs	2026-09-03 18:47:02
+@@ -4224,9 +4224,9 @@
+             ))
+         })?;
+         static COUNTER: AtomicU64 = AtomicU64::new(0);
+-        let extracted_dir = std::env::temp_dir().join(format!(
++        let extracted_dir = crate::common::temp_dir().join(format!(
+             "bioformats_slidebook7_sldyz_{}_{}",
+-            std::process::id(),
++            crate::common::process_id(),
+             COUNTER.fetch_add(1, Ordering::Relaxed)
+         ));
+         std::fs::create_dir_all(&extracted_dir).map_err(BioFormatsError::Io)?;
+diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
+--- a/src/formats/misc4.rs	2026-09-03 18:47:02
++++ b/src/formats/misc4.rs	2026-09-03 18:47:02
+@@ -2184,10 +2184,10 @@
+             && (bytes[..2] == *b"II" || bytes[..2] == *b"MM")
+             && (bytes[2] == 42 || bytes[3] == 42);
+         if is_tiff {
+-            let mut tmp = std::env::temp_dir();
++            let mut tmp = crate::common::temp_dir();
+             tmp.push(format!(
+                 "bioformats_pci_{}_{}.tif",
+-                std::process::id(),
++                crate::common::process_id(),
+                 x as u64 * 131 + y as u64 * 17 + w as u64
+             ));
+             std::fs::write(&tmp, &bytes).map_err(BioFormatsError::Io)?;
+diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
+--- a/src/formats/olympus.rs	2026-09-03 18:47:02
++++ b/src/formats/olympus.rs	2026-09-03 18:47:02
+@@ -915,10 +915,10 @@
+                     Ok(bytes) => bytes,
+                     Err(_) => return fv1000_blank_plane(meta),
+                 };
+-                let mut tmp = std::env::temp_dir();
++                let mut tmp = crate::common::temp_dir();
+                 tmp.push(format!(
+                     "bioformats_oib_{}_{}.tif",
+-                    std::process::id(),
++                    crate::common::process_id(),
+                     plane_index
+                 ));
+                 std::fs::write(&tmp, &bytes).map_err(BioFormatsError::Io)?;
+@@ -1083,7 +1083,7 @@
+ 
+ /// Probe a TIFF held in memory: returns (pixel_type, little_endian, rgb, bits).
+ fn probe_tiff(bytes: &[u8]) -> Option<(PixelType, bool, bool, u8)> {
+-    let mut tmp = std::env::temp_dir();
++    let mut tmp = crate::common::temp_dir();
+     tmp.push(format!("bioformats_oib_probe_{}.tif", rand_suffix(bytes)));
+     std::fs::write(&tmp, bytes).ok()?;
+     let mut r = TiffReader::new();
+@@ -1102,7 +1102,7 @@
+ 
+ /// Probe a TIFF for dimensions only: (pt, le, rgb, bits, width, height).
+ fn probe_tiff_dims(bytes: &[u8]) -> Option<(PixelType, bool, bool, u8, u32, u32)> {
+-    let mut tmp = std::env::temp_dir();
++    let mut tmp = crate::common::temp_dir();
+     tmp.push(format!("bioformats_oib_dims_{}.tif", rand_suffix(bytes)));
+     std::fs::write(&tmp, bytes).ok()?;
+     let mut r = TiffReader::new();
+@@ -1123,7 +1123,7 @@
+ 
+ fn rand_suffix(bytes: &[u8]) -> u64 {
+     // cheap, deterministic-ish unique suffix
+-    let pid = std::process::id() as u64;
++    let pid = crate::common::process_id() as u64;
+     let len = bytes.len() as u64;
+     let h = bytes
+         .iter()
+diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
+--- a/src/formats/zip.rs	2026-09-03 18:47:02
++++ b/src/formats/zip.rs	2026-09-03 18:47:02
+@@ -159,9 +159,9 @@
+ 
+         // Unique temp directory for this archive.
+         static COUNTER: AtomicU64 = AtomicU64::new(0);
+-        let dir = std::env::temp_dir().join(format!(
++        let dir = crate::common::temp_dir().join(format!(
+             "bioformats_zip_{}_{}",
+-            std::process::id(),
++            crate::common::process_id(),
+             COUNTER.fetch_add(1, Ordering::Relaxed)
+         ));
+         std::fs::create_dir_all(&dir).map_err(BioFormatsError::Io)?;
