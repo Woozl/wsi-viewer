@@ -14,7 +14,7 @@ import TileLayer from 'ol/layer/WebGLTile';
 import DataTileSource from 'ol/source/DataTile';
 import TileGrid from 'ol/tilegrid/TileGrid';
 import Projection from 'ol/proj/Projection';
-import { levelResolutions, type SlideModel } from '@/lib/slide';
+import { levelResolutions, zoomBounds, ZOOM_FACTOR, type SlideModel } from '@/lib/slide';
 import { roundCamera, type ViewSearch } from '@/lib/view-state';
 import type { SlideClient } from '@/lib/wasm/client';
 
@@ -102,12 +102,13 @@ export function useSlideMap(
     const view = new View({
       projection,
       extent,
-      resolutions,
       constrainOnlyCenter: false,
       showFullExtent: true,
-      // Allow zooming past the finest stored level; OpenLayers upsamples.
-      maxResolution: resolutions[0],
-      minResolution: (resolutions.at(-1) ?? 1) / 4,
+      zoomFactor: ZOOM_FACTOR,
+      // Deliberately no `resolutions` here, only on the tile grid: see
+      // zoomBounds. The tile grid still picks the nearest stored level and
+      // OpenLayers upsamples beyond it.
+      ...zoomBounds(resolutions),
     });
 
     const olMap = new Map({

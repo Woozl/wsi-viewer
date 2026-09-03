@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSlideModel,
   levelResolutions,
+  MAX_OVERZOOM,
+  zoomBounds,
   type LevelCandidate,
   type SeriesInfo,
   type Tiling,
@@ -161,5 +163,38 @@ describe('levelResolutions', () => {
 
     expect(resolutions[0]).toBeGreaterThan(resolutions[resolutions.length - 1] ?? 0);
     expect(resolutions.at(-1)).toBe(1);
+  });
+});
+
+describe('zoomBounds', () => {
+  // The Aperio pyramid: 1x, 4x, 16x and a 62x thumbnail, coarsest first.
+  const APERIO_RESOLUTIONS = [61.78846153846154, 16, 4, 1];
+
+  it('allows zooming at least MAX_OVERZOOM past the finest level', () => {
+    const { minResolution } = zoomBounds(APERIO_RESOLUTIONS);
+    const finest = APERIO_RESOLUTIONS.at(-1) ?? 1;
+
+    // Rounding up to a whole zoom step means the floor may go further, never
+    // less far, than requested. Falling short is what made the viewer bounce.
+    expect(minResolution).toBeLessThanOrEqual(finest / MAX_OVERZOOM);
+  });
+
+  it('lands the floor on a whole number of zoom steps below the coarsest level', () => {
+    const { maxResolution, minResolution } = zoomBounds(APERIO_RESOLUTIONS);
+    const steps = Math.log(maxResolution / minResolution) / Math.log(2);
+
+    // OpenLayers floors this ratio, so a fractional value silently raises the
+    // floor and cuts the zoom range short.
+    expect(steps).toBeCloseTo(Math.round(steps), 10);
+  });
+
+  it('starts at the coarsest stored resolution', () => {
+    expect(zoomBounds(APERIO_RESOLUTIONS).maxResolution).toBe(61.78846153846154);
+  });
+
+  it('handles a single-level image', () => {
+    const { maxResolution, minResolution } = zoomBounds([1]);
+    expect(maxResolution).toBe(1);
+    expect(minResolution).toBeLessThanOrEqual(1 / MAX_OVERZOOM);
   });
 });

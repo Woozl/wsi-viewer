@@ -250,3 +250,43 @@ export function buildSlideModel(
 export function levelResolutions(model: SlideModel): number[] {
   return [...model.levels].reverse().map((level) => level.downsample);
 }
+
+/**
+ * How far past the finest stored level the viewer may zoom, as a linear factor.
+ * At 64 one image pixel covers a 64px block — well beyond where a slide holds
+ * any more detail, but enough to inspect individual pixels.
+ */
+export const MAX_OVERZOOM = 64;
+
+/** Resolution ratio between adjacent zoom levels; OpenLayers' own default. */
+export const ZOOM_FACTOR = 2;
+
+export interface ZoomBounds {
+  readonly maxResolution: number;
+  readonly minResolution: number;
+}
+
+/**
+ * Resolution limits for the map view.
+ *
+ * Two subtleties, both of which otherwise make the viewer spring back when the
+ * user zooms in past full resolution:
+ *
+ * 1. These must be given as bounds, never as a `resolutions` array on the view.
+ *    An array makes OpenLayers snap to exactly those values and clamp at the
+ *    finest one, so 1:1 becomes a hard floor.
+ * 2. OpenLayers rounds the range down to a whole number of zoom-factor steps,
+ *    so an arbitrary minimum is snapped back up. Rounding the exponent up here
+ *    puts the floor at or beyond the requested overzoom.
+ */
+export function zoomBounds(resolutions: readonly number[]): ZoomBounds {
+  const coarsest = resolutions[0] ?? 1;
+  const finest = resolutions.at(-1) ?? 1;
+  const steps = Math.ceil(
+    Math.log(coarsest / (finest / MAX_OVERZOOM)) / Math.log(ZOOM_FACTOR),
+  );
+  return {
+    maxResolution: coarsest,
+    minResolution: coarsest / ZOOM_FACTOR ** steps,
+  };
+}
