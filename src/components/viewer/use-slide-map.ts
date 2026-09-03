@@ -41,11 +41,14 @@ export function useSlideMap(
   // reading `ref.current` during render is not allowed.
   const [map, setMap] = useState<Map | null>(null);
   // The camera is read once, when the map is built, and written continuously
-  // afterwards. Holding both in refs keeps the map out of the effect's
-  // dependencies, so panning never tears down and rebuilds it.
-  const initialCamera = useRef(camera);
+  // afterwards. Capturing the initial value in state and holding the callback in
+  // a ref keeps both out of the effect's dependencies, so panning never tears
+  // the map down and rebuilds it.
+  const [initialCamera] = useState(camera);
   const notifyCamera = useRef(onCameraChange);
-  notifyCamera.current = onCameraChange;
+  useEffect(() => {
+    notifyCamera.current = onCameraChange;
+  }, [onCameraChange]);
 
   useEffect(() => {
     if (container === null || model === null || client === null) return;
@@ -114,7 +117,7 @@ export function useSlideMap(
       // The default controls are replaced with themed React components.
       controls: [],
     });
-    const restored = initialCamera.current;
+    const restored = initialCamera;
     if (restored.x !== undefined && restored.y !== undefined && restored.r !== undefined) {
       view.setCenter([restored.x, -restored.y]);
       view.setResolution(restored.r);
@@ -151,7 +154,7 @@ export function useSlideMap(
       source.dispose();
       setMap((current) => (current === olMap ? null : current));
     };
-  }, [container, model, client]);
+  }, [container, model, client, initialCamera]);
 
   return { map };
 }

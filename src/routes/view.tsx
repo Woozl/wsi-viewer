@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { Loader2Icon, TriangleAlertIcon } from 'lucide-react';
 import { FormatWarning } from '@/components/sidebar/format-warning';
@@ -23,9 +23,10 @@ function ViewPage(): React.JSX.Element {
   const file = useSlideStore((state) => state.file);
   const { client, query } = useSlide(file);
 
-  // The first search value is the one restored into the map; later ones are
-  // written by the map itself, so re-reading them would fight the user.
-  const initialCamera = useRef(search);
+  // Only the first search value is restored into the map; later ones are written
+  // by the map itself, so re-reading them would fight the user. A lazy state
+  // initialiser captures it without reading a ref during render.
+  const [initialCamera] = useState(search);
 
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -82,7 +83,7 @@ function ViewPage(): React.JSX.Element {
           <SlideViewer
             model={query.data.model}
             client={client}
-            camera={initialCamera.current}
+            camera={initialCamera}
             onCameraChange={onCameraChange}
           />
         )}
