@@ -1,19 +1,27 @@
 import { useState } from 'react';
-import { useSlideMap } from './use-slide-map';
+import { useSlideMap, type CameraChange } from './use-slide-map';
 import { MapControls } from './map-controls';
 import type { SlideModel } from '@/lib/slide';
 import type { SlideClient } from '@/lib/wasm/client';
+import type { ViewSearch } from '@/lib/view-state';
 
 interface SlideViewerProps {
   readonly model: SlideModel;
   readonly client: SlideClient;
+  readonly camera: ViewSearch;
+  readonly onCameraChange: (camera: CameraChange) => void;
 }
 
-export function SlideViewer({ model, client }: SlideViewerProps): React.JSX.Element {
+export function SlideViewer({
+  model,
+  client,
+  camera,
+  onCameraChange,
+}: SlideViewerProps): React.JSX.Element {
   // Callback ref rather than useRef: the map must be built only once the node
   // exists, and a ref object would not re-run the effect when it appears.
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const { map } = useSlideMap(container, model, client);
+  const { map } = useSlideMap(container, model, client, camera, onCameraChange);
 
   return (
     <div className="relative h-full w-full">

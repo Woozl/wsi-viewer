@@ -10,11 +10,10 @@ import type { LevelCandidate, SeriesInfo } from '../slide';
 export interface DetectResult {
   readonly recognisedByName: boolean;
   readonly recognisedByBytes: boolean;
-  /** False only when both checks matched readers but no reader matched both. */
-  readonly agree: boolean;
 }
 
 export interface OpenResult {
+  readonly detection: DetectResult;
   readonly series: readonly SeriesInfo[];
   /** Every (series, resolution) pair the file exposes, with its stored tiling. */
   readonly candidates: readonly LevelCandidate[];

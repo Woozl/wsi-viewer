@@ -16,7 +16,7 @@ import {
   type SeriesInfo,
 } from '../slide';
 import { bool, isRecord, parseRecord } from '../json';
-import type { WorkerRequest, WorkerResponse } from './protocol';
+import type { DetectResult, WorkerRequest, WorkerResponse } from './protocol';
 
 
 let core: SlideCore | null = null;
@@ -95,6 +95,18 @@ function tagJpegColorSpace(jpeg: Uint8Array, colorSpace: string): Uint8Array<Arr
   tagged.set(ADOBE_APP14_RGB, 2);
   tagged.set(jpeg.subarray(2), 2 + ADOBE_APP14_RGB.length);
   return tagged;
+}
+
+/** Header size sampled for magic-byte detection. */
+const HEADER_BYTES = 64 * 1024;
+
+async function detect(active: SlideCore, file: File): Promise<DetectResult> {
+  const header = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
+  const record = parseRecord(active.detectJson(file.name, header), 'detect');
+  return {
+    recognisedByName: bool(record, 'recognisedByName', 'detect'),
+    recognisedByBytes: bool(record, 'recognisedByBytes', 'detect'),
+  };
 }
 
 async function readTile(
@@ -221,24 +233,19 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
       switch (request.kind) {
         case 'detect': {
           const active = await ensureCore(request.wasmUrl, request.file);
-          const header = new Uint8Array(
-            await request.file.slice(0, 64 * 1024).arrayBuffer(),
-          );
-          const record = parseRecord(active.detectJson(request.file.name, header), 'detect');
           reply({
             id: request.id,
             ok: true,
             kind: 'detect',
-            value: {
-              recognisedByName: bool(record, 'recognisedByName', 'detect'),
-              recognisedByBytes: bool(record, 'recognisedByBytes', 'detect'),
-              agree: bool(record, 'agree', 'detect'),
-            },
+            value: await detect(active, request.file),
           });
           return;
         }
         case 'open': {
           const active = await ensureCore(request.wasmUrl, request.file);
+          // Detection reuses the already-loaded core, so the magic-byte check
+          // costs one header read rather than a second worker and compile.
+          const detection = await detect(active, request.file);
           const probe = active.open();
           const series = parseAllSeries(active.allSeriesJson(probe));
           seriesInfo = series;
@@ -258,7 +265,12 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             }
           }
           active.close(probe);
-          reply({ id: request.id, ok: true, kind: 'open', value: { series, candidates } });
+          reply({
+            id: request.id,
+            ok: true,
+            kind: 'open',
+            value: { detection, series, candidates },
+          });
           return;
         }
         case 'tile': {

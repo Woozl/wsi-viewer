@@ -7,7 +7,7 @@
  * Tile resolutions come from the reconstructed pyramid, so OpenLayers requests
  * exactly the levels the file actually stores and interpolates between them.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/WebGLTile';
@@ -15,21 +15,37 @@ import DataTileSource from 'ol/source/DataTile';
 import TileGrid from 'ol/tilegrid/TileGrid';
 import Projection from 'ol/proj/Projection';
 import { levelResolutions, type SlideModel } from '@/lib/slide';
+import { roundCamera, type ViewSearch } from '@/lib/view-state';
 import type { SlideClient } from '@/lib/wasm/client';
 
 export interface SlideMapHandle {
   readonly map: Map | null;
 }
 
+export interface CameraChange {
+  readonly x: number;
+  readonly y: number;
+  readonly r: number;
+  readonly rot: number;
+}
+
 export function useSlideMap(
   container: HTMLDivElement | null,
   model: SlideModel | null,
   client: SlideClient | null,
+  camera: ViewSearch,
+  onCameraChange: (camera: CameraChange) => void,
 ): SlideMapHandle {
   // The map is an external resource created in an effect and published to
   // state. A ref would not re-render the controls when the map appears, and
   // reading `ref.current` during render is not allowed.
   const [map, setMap] = useState<Map | null>(null);
+  // The camera is read once, when the map is built, and written continuously
+  // afterwards. Holding both in refs keeps the map out of the effect's
+  // dependencies, so panning never tears down and rebuilds it.
+  const initialCamera = useRef(camera);
+  const notifyCamera = useRef(onCameraChange);
+  notifyCamera.current = onCameraChange;
 
   useEffect(() => {
     if (container === null || model === null || client === null) return;
@@ -98,12 +114,38 @@ export function useSlideMap(
       // The default controls are replaced with themed React components.
       controls: [],
     });
-    view.fit(extent, { padding: [24, 24, 24, 24] });
+    const restored = initialCamera.current;
+    if (restored.x !== undefined && restored.y !== undefined && restored.r !== undefined) {
+      view.setCenter([restored.x, -restored.y]);
+      view.setResolution(restored.r);
+      view.setRotation(restored.rot ?? 0);
+    } else {
+      view.fit(extent, { padding: [24, 24, 24, 24] });
+    }
+
+    // `moveend` rather than `change:center`, so a pan writes one URL entry
+    // instead of one per animation frame.
+    const publishCamera = (): void => {
+      const centre = view.getCenter();
+      const resolution = view.getResolution();
+      if (centre === undefined || resolution === undefined) return;
+      const [cx, cy] = centre;
+      if (cx === undefined || cy === undefined) return;
+      notifyCamera.current({
+        x: roundCamera(cx),
+        // Map coordinates run negative downwards; the URL carries image pixels.
+        y: roundCamera(-cy),
+        r: roundCamera(resolution, 4),
+        rot: roundCamera(view.getRotation(), 4),
+      });
+    };
+    olMap.on('moveend', publishCamera);
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- resource handoff
     setMap(olMap);
 
     return (): void => {
+      olMap.un('moveend', publishCamera);
       olMap.setTarget(undefined);
       olMap.dispose();
       source.dispose();

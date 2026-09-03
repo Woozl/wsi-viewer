@@ -10,6 +10,12 @@ import { useEffect, useState } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { SlideClient } from '@/lib/wasm/client';
 import { buildSlideModel, type SlideModel } from '@/lib/slide';
+import type { DetectResult } from '@/lib/wasm/protocol';
+
+export interface OpenedSlide {
+  readonly model: SlideModel;
+  readonly detection: DetectResult;
+}
 
 export function slideKey(file: File): readonly unknown[] {
   return ['slide', file.name, file.size, file.lastModified];
@@ -17,7 +23,7 @@ export function slideKey(file: File): readonly unknown[] {
 
 export function useSlide(file: File | null): {
   client: SlideClient | null;
-  query: UseQueryResult<SlideModel>;
+  query: UseQueryResult<OpenedSlide>;
 } {
   const [client, setClient] = useState<SlideClient | null>(null);
 
@@ -49,10 +55,10 @@ export function useSlide(file: File | null): {
     staleTime: Infinity,
     gcTime: 0,
     retry: false,
-    queryFn: async (): Promise<SlideModel> => {
+    queryFn: async (): Promise<OpenedSlide> => {
       if (file === null || client === null) throw new Error('no slide selected');
-      const { series, candidates } = await client.open(file);
-      return buildSlideModel(series, candidates);
+      const { series, candidates, detection } = await client.open(file);
+      return { model: buildSlideModel(series, candidates), detection };
     },
   });
 

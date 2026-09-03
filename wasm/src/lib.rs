@@ -533,9 +533,8 @@ pub extern "C" fn bf_compressed_tile_json(
 // Format detection
 // ---------------------------------------------------------------------------
 
-/// Reports whether the readers that claim `filename` by extension agree with the
-/// readers that claim `header` by magic bytes. Drives the upload filter and the
-/// "this file's contents don't match its name" warning.
+/// Reports which readers claim `filename` by extension and which claim `header`
+/// by magic bytes. Drives the upload filter and the header sanity check.
 ///
 /// Readers are reported as indices into the registry rather than names: the
 /// trait has no name accessor, and the registry's ordering is built by filtering
@@ -572,15 +571,16 @@ pub unsafe extern "C" fn bf_detect_json(
             }
         }
 
-        let agree = by_name.iter().any(|i| by_bytes.contains(i));
+        // Deliberately no "these disagree" verdict. The two sets are not
+        // comparable: readers implement the name and byte checks independently,
+        // so a genuine Aperio slide reports only SvsReader by name while its
+        // bytes are claimed by the generic TIFF readers, with no overlap. Only
+        // whether each set is empty carries reliable meaning.
         pack_json(&serde_json::json!({
             "byName": by_name,
             "byBytes": by_bytes,
             "recognisedByName": !by_name.is_empty(),
             "recognisedByBytes": !by_bytes.is_empty(),
-            // False only when both sets are non-empty and disjoint, i.e. the
-            // content really does look like a different format than the suffix.
-            "agree": agree,
         }))
     })
 }
