@@ -51,8 +51,8 @@ export function useSlide(file: File | null): {
     retry: false,
     queryFn: async (): Promise<SlideModel> => {
       if (file === null || client === null) throw new Error('no slide selected');
-      const { series, tilings } = await client.open(file);
-      return buildSlideModel(series, tilings);
+      const { series, candidates } = await client.open(file);
+      return buildSlideModel(series, candidates);
     },
   });
 

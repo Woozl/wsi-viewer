@@ -41,14 +41,35 @@ export interface Tiling {
   readonly reason?: string;
 }
 
+/** One candidate level: a (series, resolution) pair with its stored tiling. */
+export interface LevelCandidate {
+  readonly series: number;
+  readonly resolution: number;
+  readonly width: number;
+  readonly height: number;
+  readonly tiling: Tiling;
+}
+
 export interface PyramidLevel {
   /** Series index this level is served from. */
   readonly series: number;
+  /** Resolution index within that series. */
+  readonly resolution: number;
   readonly width: number;
   readonly height: number;
   /** Linear downsample relative to the base image; 1 at full resolution. */
   readonly downsample: number;
   readonly tiling: Tiling;
+  /** Grid the viewer requests, which is the stored tiling when there is one. */
+  readonly tileWidth: number;
+  readonly tileHeight: number;
+  readonly tilesAcross: number;
+  readonly tilesDown: number;
+  /**
+   * True when tiles come back as stored compressed blocks. Otherwise the level
+   * is served by decoding regions, which is slower but works for any reader.
+   */
+  readonly compressed: boolean;
 }
 
 export interface SlideModel {
@@ -93,6 +114,24 @@ export function parseAllSeries(text: string): SeriesInfo[] {
   );
 }
 
+export interface LevelDims {
+  readonly level: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+export function parseLevels(text: string): LevelDims[] {
+  return parseArray(text, 'levels').map((entry, index) => {
+    const context = `levels[${String(index)}]`;
+    if (!isRecord(entry)) throw new Error(`${context}: expected an object`);
+    return {
+      level: num(entry, 'level', context),
+      width: num(entry, 'width', context),
+      height: num(entry, 'height', context),
+    };
+  });
+}
+
 export function parseTiling(text: string): Tiling {
   const record = parseRecord(text, 'tiling');
   if (!bool(record, 'supported', 'tiling')) {
@@ -121,66 +160,77 @@ export function parseTiling(text: string): Tiling {
 const ASPECT_TOLERANCE = 0.02;
 
 /**
- * Tiles shorter than this are strip-encoded rather than tiled. Such a series
- * would need dozens of requests to paint a tiny image, so it is kept out of the
- * tile pyramid and used as the overview thumbnail instead.
+ * Tiles shorter than this are strip-encoded rather than tiled. Painting from
+ * strips would need one request per strip, so such a level is served by decoding
+ * regions on a synthetic grid instead.
  */
 const MIN_TILE_HEIGHT = 64;
+
+/** Grid used for levels served by decoding regions. */
+const FALLBACK_TILE_SIZE = 512;
 
 function aspect(info: { width: number; height: number }): number {
   return info.height === 0 ? 0 : info.width / info.height;
 }
 
 /**
- * Reconstructs the viewable pyramid.
+ * Reconstructs the viewable pyramid from every (series, resolution) candidate.
  *
- * `tilings` must be indexed by series. Series are classified against the largest
- * series' aspect ratio: matching ones form the pyramid (or the thumbnail, if
- * they are strip-encoded), and the rest are associated images.
+ * Formats expose pyramids in two different ways and a viewer has to cope with
+ * both. Aperio SVS arrives as several single-resolution series (Bio-Formats
+ * flattens resolutions), whereas a pyramidal OME-TIFF arrives as one series
+ * reporting three resolutions. Flattening both into candidates and then grouping
+ * by aspect ratio handles them with one rule, and keeps label and macro images —
+ * which do not share the specimen's shape — out of the pyramid.
  */
 export function buildSlideModel(
   series: readonly SeriesInfo[],
-  tilings: readonly Tiling[],
+  candidates: readonly LevelCandidate[],
 ): SlideModel {
   if (series.length === 0) throw new Error('slide contains no series');
+  if (candidates.length === 0) throw new Error('slide exposes no readable levels');
 
-  const bySize = [...series].sort((a, b) => b.width * b.height - a.width * a.height);
+  const bySize = [...candidates].sort((a, b) => b.width * b.height - a.width * a.height);
   const base = bySize[0];
-  if (base === undefined) throw new Error('slide contains no series');
+  if (base === undefined) throw new Error('slide exposes no readable levels');
   const baseAspect = aspect(base);
 
   const sameShape = bySize.filter(
-    (info) => baseAspect > 0 && Math.abs(aspect(info) - baseAspect) / baseAspect <= ASPECT_TOLERANCE,
+    (entry) => baseAspect > 0 && Math.abs(aspect(entry) - baseAspect) / baseAspect <= ASPECT_TOLERANCE,
   );
-  const associated = bySize.filter((info) => !sameShape.includes(info));
+  const pyramidSeries = new Set(sameShape.map((entry) => entry.series));
+  const associated = series.filter((info) => !pyramidSeries.has(info.series));
 
-  const levels: PyramidLevel[] = [];
-  const strips: SeriesInfo[] = [];
-  for (const info of sameShape) {
-    const tiling = tilings[info.series];
-    if (!tiling?.supported) continue;
-    if (tiling.tileHeight < MIN_TILE_HEIGHT || tiling.tileWidth < MIN_TILE_HEIGHT) {
-      strips.push(info);
-      continue;
-    }
-    levels.push({
-      series: info.series,
-      width: info.width,
-      height: info.height,
-      downsample: info.width === 0 ? 1 : base.width / info.width,
-      tiling,
-    });
-  }
+  const levels: PyramidLevel[] = sameShape.map((entry) => {
+    const usable =
+      entry.tiling.supported &&
+      entry.tiling.tileWidth >= MIN_TILE_HEIGHT &&
+      entry.tiling.tileHeight >= MIN_TILE_HEIGHT;
+
+    const tileWidth = usable ? entry.tiling.tileWidth : FALLBACK_TILE_SIZE;
+    const tileHeight = usable ? entry.tiling.tileHeight : FALLBACK_TILE_SIZE;
+
+    return {
+      series: entry.series,
+      resolution: entry.resolution,
+      width: entry.width,
+      height: entry.height,
+      downsample: entry.width === 0 ? 1 : base.width / entry.width,
+      tiling: entry.tiling,
+      tileWidth,
+      tileHeight,
+      tilesAcross: usable ? entry.tiling.tilesAcross : Math.ceil(entry.width / tileWidth),
+      tilesDown: usable ? entry.tiling.tilesDown : Math.ceil(entry.height / tileHeight),
+      compressed: usable,
+    };
+  });
 
   if (levels.length === 0) {
-    throw new Error('no series in this slide exposes usable tiling');
+    throw new Error('no level in this slide can be displayed');
   }
 
-  // Prefer a strip-encoded small series for the overview; otherwise the
-  // coarsest real level stands in.
-  const smallestStrip = strips.at(-1);
   const coarsest = levels.at(-1);
-  const thumbnailSeries = smallestStrip?.series ?? coarsest?.series ?? null;
+  const thumbnailSeries = coarsest?.series ?? null;
 
   return {
     width: base.width,

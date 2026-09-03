@@ -5,7 +5,7 @@
  * reads block, so keeping it behind a worker is what allows the main thread to
  * stay responsive while tiles are decoded.
  */
-import type { SeriesInfo, Tiling } from '../slide';
+import type { LevelCandidate, SeriesInfo } from '../slide';
 
 export interface DetectResult {
   readonly recognisedByName: boolean;
@@ -16,14 +16,27 @@ export interface DetectResult {
 
 export interface OpenResult {
   readonly series: readonly SeriesInfo[];
-  /** Indexed by series. */
-  readonly tilings: readonly Tiling[];
+  /** Every (series, resolution) pair the file exposes, with its stored tiling. */
+  readonly candidates: readonly LevelCandidate[];
 }
 
 export type WorkerRequest =
   | { readonly id: number; readonly kind: 'detect'; readonly wasmUrl: string; readonly file: File }
   | { readonly id: number; readonly kind: 'open'; readonly wasmUrl: string; readonly file: File }
-  | { readonly id: number; readonly kind: 'tile'; readonly series: number; readonly col: number; readonly row: number }
+  | {
+      readonly id: number;
+      readonly kind: 'tile';
+      readonly series: number;
+      readonly resolution: number;
+      readonly col: number;
+      readonly row: number;
+      readonly tileWidth: number;
+      readonly tileHeight: number;
+      readonly levelWidth: number;
+      readonly levelHeight: number;
+      /** False when the level must be served by decoding a region. */
+      readonly compressed: boolean;
+    }
   | {
       readonly id: number;
       readonly kind: 'region';

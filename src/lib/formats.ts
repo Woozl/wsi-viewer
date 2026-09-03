@@ -4,7 +4,18 @@
  */
 import { SUPPORTED_EXTENSIONS } from '@/generated/supported-extensions';
 
-const SUPPORTED = new Set<string>(SUPPORTED_EXTENSIONS);
+/**
+ * Extensions whose readers verify file contents inside `is_this_type_by_name`.
+ *
+ * The generated list is produced by probing each reader with a synthetic path,
+ * so a reader that also opens the file — `NdpiReader` checks for Hamamatsu TIFF
+ * tags, for instance — always declines and its extension is missed. These are
+ * recovered by inspecting which readers gate on `path` beyond its suffix; the
+ * open call still decides whether the file is really readable.
+ */
+const CONTENT_GATED_EXTENSIONS = ['html', 'inf', 'ndpi', 'pds', 'set', 'spc'] as const;
+
+const SUPPORTED = new Set<string>([...SUPPORTED_EXTENSIONS, ...CONTENT_GATED_EXTENSIONS]);
 
 /**
  * Formats that arrive as a primary file plus a sibling directory of tiles.
@@ -41,6 +52,6 @@ export function companionHint(fileName: string): string | null {
 }
 
 /** `accept` attribute value for the file input. */
-export const ACCEPT_ATTRIBUTE = SUPPORTED_EXTENSIONS.map((ext) => `.${ext}`).join(',');
+export const ACCEPT_ATTRIBUTE = [...SUPPORTED].map((ext) => `.${ext}`).join(',');
 
-export const SUPPORTED_COUNT = SUPPORTED_EXTENSIONS.length;
+export const SUPPORTED_COUNT = SUPPORTED.size;

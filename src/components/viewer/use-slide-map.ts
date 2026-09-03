@@ -41,8 +41,8 @@ export function useSlideMap(
     const resolutions = levelResolutions(model);
     const reversed = [...model.levels].reverse();
     const tileSizes = reversed.map((level): [number, number] => [
-      level.tiling.tileWidth,
-      level.tiling.tileHeight,
+      level.tileWidth,
+      level.tileHeight,
     ]);
 
     const tileGrid = new TileGrid({
@@ -59,10 +59,20 @@ export function useSlideMap(
       loader: async (z, x, y) => {
         const level = reversed[z];
         if (level === undefined) throw new Error(`no pyramid level for zoom ${String(z)}`);
-        if (x < 0 || y < 0 || x >= level.tiling.tilesAcross || y >= level.tiling.tilesDown) {
+        if (x < 0 || y < 0 || x >= level.tilesAcross || y >= level.tilesDown) {
           throw new Error('tile out of range');
         }
-        const bitmap = await client.tile(level.series, x, y);
+        const bitmap = await client.tile({
+          series: level.series,
+          resolution: level.resolution,
+          col: x,
+          row: y,
+          tileWidth: level.tileWidth,
+          tileHeight: level.tileHeight,
+          levelWidth: level.width,
+          levelHeight: level.height,
+          compressed: level.compressed,
+        });
         if (bitmap === null) throw new Error('tile unavailable');
         return bitmap;
       },

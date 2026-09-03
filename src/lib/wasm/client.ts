@@ -81,8 +81,18 @@ export class SlideClient {
   }
 
   /** Returns a decoded tile, or null when the level cannot supply one. */
-  async tile(series: number, col: number, row: number): Promise<ImageBitmap | null> {
-    const response = await this.send({ id: this.nextRequestId(), kind: 'tile', series, col, row });
+  async tile(request: {
+    series: number;
+    resolution: number;
+    col: number;
+    row: number;
+    tileWidth: number;
+    tileHeight: number;
+    levelWidth: number;
+    levelHeight: number;
+    compressed: boolean;
+  }): Promise<ImageBitmap | null> {
+    const response = await this.send({ id: this.nextRequestId(), kind: 'tile', ...request });
     if (!response.ok) throw new Error(response.error);
     if (response.kind !== 'tile') throw new Error('unexpected response to tile');
     return response.value;

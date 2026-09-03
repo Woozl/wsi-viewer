@@ -8,16 +8,26 @@
  * the main thread entirely.
  */
 import { SlideCore } from './core';
-import { parseAllSeries, parseTiling } from '../slide';
+import {
+  parseAllSeries,
+  parseLevels,
+  parseTiling,
+  type LevelCandidate,
+  type SeriesInfo,
+} from '../slide';
 import { bool, isRecord, parseRecord } from '../json';
 import type { WorkerRequest, WorkerResponse } from './protocol';
 
 
 let core: SlideCore | null = null;
-/** One handle per series: the reader is stateful, and a handle per series
- *  avoids re-selecting the series on every tile request. */
-const handles = new Map<number, number>();
+/**
+ * One handle per (series, resolution) pair. The reader is stateful, so a handle
+ * per level avoids re-selecting series and resolution on every tile request.
+ */
+const handles = new Map<string, number>();
 let compiled: Promise<WebAssembly.Module> | null = null;
+/** Cached from `open`; needed to interpret raw pixels on the fallback path. */
+let seriesInfo: readonly SeriesInfo[] = [];
 
 function compile(url: string): Promise<WebAssembly.Module> {
   compiled ??= WebAssembly.compileStreaming(fetch(url));
@@ -29,12 +39,15 @@ async function ensureCore(wasmUrl: string, file: File): Promise<SlideCore> {
   return core;
 }
 
-function handleForSeries(active: SlideCore, series: number): number {
-  const existing = handles.get(series);
+function handleFor(active: SlideCore, series: number, resolution: number): number {
+  const key = `${String(series)}:${String(resolution)}`;
+  const existing = handles.get(key);
   if (existing !== undefined) return existing;
   const handle = active.open();
   active.setSeries(handle, series);
-  handles.set(series, handle);
+  // Selecting a series resets the level, so resolution is applied afterwards.
+  if (resolution !== 0) active.setResolution(handle, resolution);
+  handles.set(key, handle);
   return handle;
 }
 
@@ -87,11 +100,15 @@ function tagJpegColorSpace(jpeg: Uint8Array, colorSpace: string): Uint8Array<Arr
 async function readTile(
   active: SlideCore,
   series: number,
+  resolution: number,
   col: number,
   row: number,
 ): Promise<ImageBitmap | null> {
-  const handle = handleForSeries(active, series);
-  const record = parseRecord(active.compressedTileJson(handle, 0, 0, col, row), 'tile');
+  const handle = handleFor(active, series, resolution);
+  const record = parseRecord(
+    active.compressedTileJson(handle, 0, resolution, col, row),
+    'tile',
+  );
   const payload = record['payload'];
   if (!isRecord(payload)) throw new Error('tile: missing payload');
 
@@ -111,6 +128,90 @@ async function readTile(
   // FileRange and Fragmented are not produced by the readers exercised so far;
   // falling back to a decoded region keeps the viewer correct if they appear.
   return null;
+}
+
+/**
+ * Expands raw pixels into RGBA.
+ *
+ * Readers hand back the file's own layout, so the data may be planar or
+ * interleaved and may carry one or three channels. Values wider than 8 bits are
+ * reduced by taking the high byte, which is enough for display but is not a
+ * substitute for real windowing on high-bit-depth microscopy data.
+ */
+function toRgba(
+  pixels: Uint8Array,
+  info: SeriesInfo,
+  width: number,
+  height: number,
+): Uint8ClampedArray<ArrayBuffer> {
+  const pixelCount = width * height;
+  const rgba = new Uint8ClampedArray(pixelCount * 4);
+  const bytesPerSample = Math.max(1, Math.ceil(info.bitsPerPixel / 8));
+  const channels = info.isRgb ? Math.min(3, info.sizeC) : 1;
+  // Little-endian samples put the most significant byte last.
+  const sampleOffset = info.isLittleEndian ? bytesPerSample - 1 : 0;
+
+  const sampleAt = (channel: number, index: number): number => {
+    const position = info.isInterleaved
+      ? (index * channels + channel) * bytesPerSample
+      : (channel * pixelCount + index) * bytesPerSample;
+    return pixels[position + sampleOffset] ?? 0;
+  };
+
+  for (let index = 0; index < pixelCount; index += 1) {
+    const out = index * 4;
+    if (channels === 1) {
+      const value = sampleAt(0, index);
+      rgba[out] = value;
+      rgba[out + 1] = value;
+      rgba[out + 2] = value;
+    } else {
+      rgba[out] = sampleAt(0, index);
+      rgba[out + 1] = sampleAt(1, index);
+      rgba[out + 2] = sampleAt(2, index);
+    }
+    rgba[out + 3] = 255;
+  }
+  return rgba;
+}
+
+/** Serves a tile by decoding a region, for levels with no compressed blocks. */
+async function readRegionTile(
+  active: SlideCore,
+  request: {
+    series: number;
+    resolution: number;
+    col: number;
+    row: number;
+    tileWidth: number;
+    tileHeight: number;
+    levelWidth: number;
+    levelHeight: number;
+  },
+): Promise<ImageBitmap | null> {
+  const info = seriesInfo.find((entry) => entry.series === request.series);
+  if (info === undefined) throw new Error(`unknown series ${String(request.series)}`);
+
+  const x = request.col * request.tileWidth;
+  const y = request.row * request.tileHeight;
+  if (x >= request.levelWidth || y >= request.levelHeight) return null;
+
+  // Edge tiles are clipped to the level, then composited onto a full-size tile
+  // so every tile handed to OpenLayers has the grid's dimensions.
+  const width = Math.min(request.tileWidth, request.levelWidth - x);
+  const height = Math.min(request.tileHeight, request.levelHeight - y);
+  const handle = handleFor(active, request.series, request.resolution);
+  const pixels = active.readRegion(handle, 0, x, y, width, height);
+
+  const image = new ImageData(toRgba(pixels, info, width, height), width, height);
+  if (width === request.tileWidth && height === request.tileHeight) {
+    return await createImageBitmap(image);
+  }
+  const canvas = new OffscreenCanvas(request.tileWidth, request.tileHeight);
+  const context = canvas.getContext('2d');
+  if (context === null) throw new Error('could not create a 2d context for an edge tile');
+  context.putImageData(image, 0, 0);
+  return await createImageBitmap(canvas);
 }
 
 self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
@@ -140,17 +241,31 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           const active = await ensureCore(request.wasmUrl, request.file);
           const probe = active.open();
           const series = parseAllSeries(active.allSeriesJson(probe));
-          const tilings = series.map((info) => {
+          seriesInfo = series;
+          // A pyramid may be spread across series (Aperio) or across resolutions
+          // within one series (pyramidal OME-TIFF), so both axes are enumerated.
+          const candidates: LevelCandidate[] = [];
+          for (const info of series) {
             active.setSeries(probe, info.series);
-            return parseTiling(active.levelTilingJson(probe, 0, 0));
-          });
+            for (const level of parseLevels(active.levelsJson(probe))) {
+              candidates.push({
+                series: info.series,
+                resolution: level.level,
+                width: level.width,
+                height: level.height,
+                tiling: parseTiling(active.levelTilingJson(probe, 0, level.level)),
+              });
+            }
+          }
           active.close(probe);
-          reply({ id: request.id, ok: true, kind: 'open', value: { series, tilings } });
+          reply({ id: request.id, ok: true, kind: 'open', value: { series, candidates } });
           return;
         }
         case 'tile': {
           if (core === null) throw new Error('no slide is open');
-          const bitmap = await readTile(core, request.series, request.col, request.row);
+          const bitmap = request.compressed
+            ? await readTile(core, request.series, request.resolution, request.col, request.row)
+            : await readRegionTile(core, request);
           reply(
             { id: request.id, ok: true, kind: 'tile', value: bitmap },
             bitmap === null ? [] : [bitmap],
@@ -159,7 +274,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
         }
         case 'region': {
           if (core === null) throw new Error('no slide is open');
-          const handle = handleForSeries(core, request.series);
+          const handle = handleFor(core, request.series, 0);
           const pixels = core.readRegion(
             handle,
             0,

@@ -205,6 +205,12 @@ export class SlideCore {
     }
   }
 
+  setResolution(handle: number, level: number): void {
+    if (this.exports.bf_set_resolution(handle, level) !== 0) {
+      throw new Error(`could not select level ${String(level)}: ${this.lastError()}`);
+    }
+  }
+
   metadataJson(handle: number): string {
     const text = this.takeText(this.exports.bf_metadata_json(handle));
     if (text === null) throw new Error(`could not read metadata: ${this.lastError()}`);

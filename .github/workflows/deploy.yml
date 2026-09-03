@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow the deploy job to publish to Pages via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# A superseded deploy is never worth finishing, but let an in-flight one land.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Rust with the WASI target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+
+      # bioformats is ~220k lines across 150 crates; a cold release build with
+      # LTO dominates CI time, so the cargo cache is keyed on the wasm manifest.
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm
+          cache-on-failure: true
+
+      - run: npm ci
+
+      # Fetches and patches hdf5-pure-rust, builds the core to wasm32-wasip1,
+      # and regenerates src/generated/supported-extensions.ts.
+      - name: Build WebAssembly core
+        run: npm run build:wasm
+
+      - name: Fail if the generated extension list is stale
+        run: git diff --exit-code src/generated/supported-extensions.ts
+
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run test:e2e
+
+      - name: Build site
+        run: npx vite build
+
+      - uses: actions/configure-pages@v5
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

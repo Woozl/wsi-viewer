@@ -44,16 +44,22 @@ export function MetadataPanel({ model, fileName }: MetadataPanelProps): React.JS
     return [...parsed.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [base]);
 
+  // `min-w-0` is applied throughout: OME-XML arrives as one very long unbroken
+  // string, which would otherwise stretch the grid and push the panel's content
+  // out of view instead of wrapping.
   return (
-    <ScrollArea className="h-full">
-      <div className="space-y-4 p-3">
+    <ScrollArea className="h-full w-full">
+      <div className="w-full min-w-0 space-y-4 p-3">
         <section className="space-y-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Slide
           </h2>
           <p className="break-all text-sm font-medium">{fileName}</p>
-          <dl className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
-            <Field label="Dimensions" value={`${formatPixels(model.width)} x ${formatPixels(model.height)}`} />
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+            <Field
+              label="Dimensions"
+              value={`${formatPixels(model.width)} x ${formatPixels(model.height)}`}
+            />
             <Field label="Size" value={describeSize(model.width, model.height)} />
             <Field label="Pyramid levels" value={String(model.levels.length)} />
             <Field label="Pixel type" value={base?.pixelType ?? 'unknown'} />
@@ -72,10 +78,10 @@ export function MetadataPanel({ model, fileName }: MetadataPanelProps): React.JS
                 key={level.series}
                 className="flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1.5 text-xs"
               >
-                <span className="font-mono">
+                <span className="truncate font-mono">
                   {formatPixels(level.width)} x {formatPixels(level.height)}
                 </span>
-                <Badge variant="outline">
+                <Badge variant="outline" className="shrink-0">
                   {level.downsample === 1 ? '1x' : `${level.downsample.toFixed(0)}x down`}
                 </Badge>
               </li>
@@ -92,11 +98,15 @@ export function MetadataPanel({ model, fileName }: MetadataPanelProps): React.JS
               </h2>
               <dl className="space-y-1.5 text-xs">
                 {entries.map(([key, value]) => (
-                  <div key={key} className="grid grid-cols-[minmax(0,7rem)_1fr] gap-2">
+                  <div
+                    key={key}
+                    className="grid min-w-0 grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)] gap-2"
+                  >
                     <dt className="truncate text-muted-foreground" title={key}>
                       {key}
                     </dt>
-                    <dd className="break-words font-mono text-[11px]">{value}</dd>
+                    {/* Values such as OME-XML have no spaces to break on. */}
+                    <dd className="min-w-0 break-all font-mono text-[11px]">{value}</dd>
                   </div>
                 ))}
               </dl>
@@ -112,7 +122,7 @@ function Field({ label, value }: { readonly label: string; readonly value: strin
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-medium">{value}</dd>
+      <dd className="min-w-0 break-words font-medium">{value}</dd>
     </>
   );
 }

@@ -14,7 +14,8 @@
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "npm run fixture && playwright test",
+    "fixture": "cd wasm && cargo run --release --bin make-fixture -- ../e2e/fixtures/synthetic.ome.tif"
   },
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
