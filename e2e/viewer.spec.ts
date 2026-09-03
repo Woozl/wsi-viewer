@@ -54,6 +54,43 @@ test('opens a pyramidal slide and renders tiles', async ({ page }) => {
     .toBeGreaterThan(1000);
 });
 
+test('shows an overview map that follows the viewport', async ({ page }) => {
+  await page.goto('./');
+  await page.getByLabel('Choose a whole-slide image').setInputFiles(FIXTURE);
+
+  const overview = page.getByRole('img', { name: /Overview of the slide/ });
+  await expect(overview).toBeVisible({ timeout: 60_000 });
+
+  // Zoom in first: with the whole slide in view the extent constraint pins the
+  // centre, so recentring is a no-op until there is somewhere to pan to.
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+  await page.getByRole('button', { name: 'Zoom in' }).click();
+
+  // Recentre by clicking near the top of the overview, and confirm the map
+  // followed by reading the centre back out of the URL.
+  const box = await overview.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+
+  // The initial fit already writes a centre, so wait for it to actually move
+  // rather than for the parameter merely to exist.
+  const readY = (): string | null => new URL(page.url()).searchParams.get('y');
+  await expect.poll(readY, { timeout: 15_000 }).not.toBeNull();
+  const before = Number(readY());
+
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.2);
+  await expect.poll(() => Number(readY()), { timeout: 15_000 }).not.toBe(before);
+
+  // The fixture is 768 tall; clicking a fifth of the way down lands well above
+  // the middle, and above wherever the view started.
+  expect(Number(readY())).toBeLessThan(768 / 2);
+
+  // And it can be collapsed out of the way.
+  await page.getByRole('button', { name: 'Hide overview map' }).click();
+  await expect(overview).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Show overview map' })).toBeVisible();
+});
+
 test('rejects a file no reader claims', async ({ page }) => {
   await page.goto('./');
 

@@ -93,6 +93,7 @@ function ViewPage(): React.JSX.Element {
             client={client}
             camera={initialCamera}
             onCameraChange={onCameraChange}
+            slideKey={`${file.name}:${String(file.size)}`}
           />
         )}
       </div>

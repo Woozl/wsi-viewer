@@ -10,6 +10,7 @@ to WebAssembly; no server sees the data, and the build output is static files.
   OME-TIFF, DICOM, CZI and others
 - Pans and zooms a gigapixel pyramid at interactive speed
 - Shows the slide's full format metadata, pyramid layout and associated images
+- Overview map showing where the viewport sits, with click-to-navigate
 - Reads whole folders through the File System Access API, remembering them
   between visits
 - Light, dark and system themes; keyboard-navigable throughout

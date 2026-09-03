@@ -30,6 +30,12 @@ export default tseslint.config(
     rules: {
       ...reactHooks.configs.recommended.rules,
       ...jsxA11y.flatConfigs.strict.rules,
+      // A canvas-based map is role="application" and must be focusable for
+      // OpenLayers' keyboard pan and zoom to reach it.
+      'jsx-a11y/no-noninteractive-tabindex': [
+        'error',
+        { tags: [], roles: ['tabpanel', 'application'] },
+      ],
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
 
       // The brief calls for strict typing with no escape hatches.
