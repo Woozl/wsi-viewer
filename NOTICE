@@ -1,0 +1,41 @@
+WSI Viewer
+Copyright (C) 2026 David Glymph
+
+This program is free software; you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation; either version 2 of the License, or (at your option) any later
+version. See LICENSE for the full text.
+
+------------------------------------------------------------------------------
+Third-party components
+------------------------------------------------------------------------------
+
+bioformats (https://crates.io/crates/bioformats)
+    Copyright the bioformats-rs authors.
+    Licensed under GPL-2.0-or-later.
+
+    A pure-Rust translation of the OME Bio-Formats library
+    (https://www.openmicroscopy.org/bio-formats/). This project compiles that
+    crate to WebAssembly and distributes the result, so the application as a
+    whole is a derivative work and is licensed GPL-2.0-or-later.
+
+    Built with default features disabled. The `zarr` and `tissuefaxs` features
+    are omitted because they depend on zstd-sys and libsqlite3-sys, which are C
+    libraries and cannot target wasm32. The `openslide` feature is likewise
+    omitted: openslide-pure-rs links system libjpeg, cairo and libopenjp2.
+
+hdf5-pure-rust (https://crates.io/crates/hdf5-pure-rust)
+    A transitive dependency of bioformats, fetched and patched at build time by
+    scripts/prepare-vendor.mjs. See patches/hdf5-pure-rust-wasm32.patch: three
+    guard constants are 4 * 1024 * 1024 * 1024, which is exactly 2^32 and
+    overflows a 32-bit usize during const evaluation on wasm32.
+
+@bjorn3/browser_wasi_shim (https://github.com/bjorn3/browser_wasi_shim)
+    Licensed under MIT OR Apache-2.0. Provides the WASI implementation the core
+    runs against in the browser.
+
+OpenLayers (https://openlayers.org/)
+    Licensed under BSD-2-Clause.
+
+Remaining JavaScript dependencies are listed in package.json with their own
+licenses; see node_modules for the full texts.

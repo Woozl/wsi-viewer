@@ -1,0 +1,33 @@
+[package]
+name = "wsi-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# `zarr`/`tissuefaxs` pull in zstd-sys and libsqlite3-sys, which are C and cannot
+# target wasm32. Everything else in the crate is pure Rust.
+bioformats = { version = "0.1.8", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[patch.crates-io]
+# Three guard constants are `4 * 1024 * 1024 * 1024`, which is exactly 2^32 and
+# overflows a 32-bit usize at const-eval time. See patches/hdf5-pure-rust-wasm32.patch.
+hdf5-pure-rust = { path = "../vendor/hdf5-pure-rust" }
+
+# Slide decoding is on the interaction path, so favour speed; `release-size` exists
+# to measure the size/latency trade-off.
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.release-size]
+inherits = "release"
+opt-level = "z"

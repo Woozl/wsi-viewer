@@ -1,0 +1,33 @@
+--- a/src/hl/dataset/read.rs
++++ b/src/hl/dataset/read.rs
+@@ -71,7 +71,7 @@
+         let (_, _, total_bytes) = Self::raw_read_size(&info)?;
+ 
+         // Sanity limit: refuse to allocate more than 4GB in a single read
+-        const MAX_READ_BYTES: usize = 4 * 1024 * 1024 * 1024;
++        const MAX_READ_BYTES: usize = if usize::BITS >= 64 { 4 * 1024 * 1024 * 1024 } else { usize::MAX };
+         if total_bytes > MAX_READ_BYTES {
+             return Err(Error::InvalidFormat(format!(
+                 "dataset too large for single read: {total_bytes} bytes (max {MAX_READ_BYTES})"
+--- a/src/format/local_heap.rs
++++ b/src/format/local_heap.rs
+@@ -8,7 +8,7 @@
+ 
+ /// Local heap magic: "HEAP"
+ const HEAP_MAGIC: [u8; 4] = [b'H', b'E', b'A', b'P'];
+-const MAX_LOCAL_HEAP_BYTES: usize = 4 * 1024 * 1024 * 1024;
++const MAX_LOCAL_HEAP_BYTES: usize = if usize::BITS >= 64 { 4 * 1024 * 1024 * 1024 } else { usize::MAX };
+ 
+ /// Parsed local-heap prefix (the on-disk header that precedes the data
+ /// segment). Mirrors the work `H5HL__cache_prefix_deserialize` does in
+--- a/src/format/fractal_heap/mod.rs
++++ b/src/format/fractal_heap/mod.rs
+@@ -37,7 +37,7 @@
+ pub(super) const FHDB_MAGIC: [u8; 4] = [b'F', b'H', b'D', b'B'];
+ /// Indirect block magic: "FHIB"
+ pub(super) const FHIB_MAGIC: [u8; 4] = [b'F', b'H', b'I', b'B'];
+-const MAX_HEAP_OBJECT_BYTES: usize = 4 * 1024 * 1024 * 1024;
++const MAX_HEAP_OBJECT_BYTES: usize = if usize::BITS >= 64 { 4 * 1024 * 1024 * 1024 } else { usize::MAX };
+ const FRACTAL_HEAP_DTABLE_IMAGE_LEN: usize = 24;
+ const HUGE_FILTERED_DIRECT_RECORD_LEN: usize = 28;
+ 

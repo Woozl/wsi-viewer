@@ -26,3 +26,6 @@ wasm/target
 *.njsproj
 *.sln
 *.sw?
+
+# Fetched and patched by scripts/prepare-vendor.mjs
+vendor
