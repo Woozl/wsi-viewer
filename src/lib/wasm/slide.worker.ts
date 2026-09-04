@@ -283,8 +283,14 @@ function channelRanges(
   const handle = handleFor(active, series, resolution);
 
   return planes.map((plane) => {
-    const pixels = active.readRegion(handle, plane, 0, 0, width, height);
-    return computeDisplayRange(pixels, info, width * height);
+    try {
+      const pixels = active.readRegion(handle, plane, 0, 0, width, height);
+      return computeDisplayRange(pixels, info, width * height);
+    } catch {
+      // One plane the reader will not sample must not cost the whole slide its
+      // windows, which is what blocks the viewer from drawing anything at all.
+      return FULL_8_BIT;
+    }
   });
 }
 

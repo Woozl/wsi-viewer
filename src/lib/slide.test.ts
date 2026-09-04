@@ -154,6 +154,32 @@ describe('buildSlideModel', () => {
   it('rejects a slide with no series', () => {
     expect(() => buildSlideModel([], [])).toThrow(/no series/i);
   });
+
+  it('keeps an RGB thumbnail out of a fluorescence pyramid', () => {
+    // An Akoya QPTIFF ships a whole-slide RGB thumbnail whose aspect ratio
+    // matches the specimen exactly, so shape alone would file it as the
+    // coarsest level. Sampling channel windows there then asks for planes it
+    // does not have, and the viewer never draws.
+    const fluorescence = (index: number, width: number, height: number): SeriesInfo =>
+      series({ series: index, width, height, sizeC: 40, isRgb: false, seriesCount: 3 });
+
+    const infos = [
+      fluorescence(0, 28800, 62640),
+      fluorescence(1, 900, 1957),
+      series({ series: 2, width: 225, height: 489, sizeC: 3, isRgb: true, seriesCount: 3 }),
+    ];
+    const candidates = [
+      candidate(0, 28800, 62640, UNTILED),
+      candidate(1, 900, 1957, UNTILED),
+      candidate(2, 225, 489, UNTILED),
+    ];
+
+    const model = buildSlideModel(infos, candidates);
+
+    expect(model.levels.map((level) => level.series)).toEqual([0, 1]);
+    expect(model.associated.map((info) => info.series)).toEqual([2]);
+  });
+
 });
 
 describe('levelResolutions', () => {

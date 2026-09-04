@@ -64,13 +64,19 @@ function sampleAt(
  *
  * Scaling by the full 16-bit range would be as dark as taking the high byte, so
  * the range comes from the data itself, with the extreme tails trimmed.
+ *
+ * Eight-bit RGB is the one case left alone: its channels are already composited
+ * for display, and windowing them separately would shift the colour balance. A
+ * separate channel plane gets a window whatever its depth — an 8-bit
+ * fluorescence channel whose signal sits below 90, as an Akoya QPTIFF's does,
+ * is just as unreadable at full scale as a 16-bit one.
  */
 export function computeDisplayRange(
   pixels: Uint8Array,
   info: SeriesInfo,
   pixelCount: number,
 ): DisplayRange {
-  if (bytesPerSample(info) === 1) return FULL_8_BIT;
+  if (info.isRgb && bytesPerSample(info) === 1) return FULL_8_BIT;
 
   const histogram = new Uint32Array(65536);
   const channels = channelCount(info);

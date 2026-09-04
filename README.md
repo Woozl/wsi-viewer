@@ -7,7 +7,7 @@ to WebAssembly; no server sees the data, and the build output is static files.
 ## What it does
 
 - Opens slides in the formats bioformats' readers claim — Aperio SVS, pyramidal
-  OME-TIFF, DICOM, CZI, 3DHISTECH MIRAX and others
+  OME-TIFF, Akoya QPTIFF, DICOM, CZI, 3DHISTECH MIRAX and others
 - Pans and zooms a gigapixel pyramid at interactive speed
 - Shows the slide's full format metadata, pyramid layout and associated images
 - Overview map showing where the viewport sits, with click-to-navigate
@@ -82,6 +82,13 @@ resolutions (pyramidal OME-TIFF). Both are flattened into `(series, resolution)`
 candidates and grouped by aspect ratio, which recovers the pyramid and leaves
 label and macro images out of it.
 
+Shape alone is not enough. An Akoya QPTIFF ships an RGB thumbnail of the whole
+slide, so its aspect ratio matches the specimen exactly while its pixels mean
+something quite different from the 40 fluorescence channels above it. A level
+must also agree with the base on what a pixel is — channel count, RGB-ness and
+depth — or the viewer ends up sampling channel windows from an image that has no
+such channels, and draws nothing at all.
+
 **A `.mrxs` file has to be dispatched by suffix.** Its bytes are the slide's JPEG
 overview, with the pixel data in a sibling directory, so byte sniffing hands it
 to a JPEG reader that duly reports the overview's dimensions instead of the
@@ -124,6 +131,15 @@ to 539 GB and traps the allocator. A slide whose coarsest level is still enormou
 gets no overview rather than a trap, because a trap would poison the instance for
 every later read too.
 
+**An LZW strip is decoded to its own size, not its input's.** TIFF readers hand
+the decoder more compressed input than the block occupies — this crate follows
+Java Bio-Formats in reading up to double the stored byte count — on the
+assumption that the end-of-information code stops it first. Not every writer
+emits one: a QPTIFF channel omits it on 13 of a level's 4,920 strips, and there
+the decoder ran on into the next strip's bytes and reported an invalid code, so
+whole bands of the slide went missing. Stopping at the block's decoded size makes
+the surplus harmless, which is what libtiff does.
+
 **Panels dock to any edge.** The arrangement is described by which dock each
 panel sits in plus one global ordering, so moving a panel between docks never
 has to reconcile two arrays. Top and bottom span the full width and the side
@@ -145,7 +161,11 @@ channel colour first, then the emission wavelength, then a fallback palette.
 Formats often record only the excitation wavelength, which is shorter than what
 the eye would see, so it is shifted by a typical Stokes shift before being
 converted; 405 nm excitation is a blue DAPI channel, not a violet one. Windows
-are sampled from the image when it opens, so a slide is legible immediately.
+are sampled from the image when it opens, so a slide is legible immediately —
+including 8-bit channels, whose signal routinely sits in the bottom fifth of the
+range and which are as unreadable at full scale as a 16-bit channel is. Only
+already-composited RGB is left alone, because windowing its channels apart would
+shift the colour balance.
 
 Brightfield slides keep the compressed JPEG path and get one window over the
 already-composited RGB, which is what keeps gigapixel brightfield usable.

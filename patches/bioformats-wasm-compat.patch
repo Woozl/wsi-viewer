@@ -1,6 +1,65 @@
+diff -ru orig/src/common/codec.rs new/src/common/codec.rs
+--- a/src/common/codec.rs	2026-09-04 13:46:02
++++ b/src/common/codec.rs	2026-09-04 13:46:02
+@@ -2,11 +2,51 @@
+ 
+ /// Decompress LZW-encoded data (TIFF variant — horizontal differencing applied separately).
+ pub fn decompress_lzw(data: &[u8]) -> Result<Vec<u8>> {
+-    use weezl::{decode::Decoder, BitOrder};
++    decompress_lzw_limited(data, usize::MAX)
++}
++
++/// Decompress an LZW strip or tile, stopping once `limit` bytes are produced.
++///
++/// TIFF readers routinely hand the decoder more input than the block occupies —
++/// this crate follows Java Bio-Formats in reading up to double the stored byte
++/// count — on the assumption that the end-of-information code stops it first.
++/// Not every writer emits one: an Akoya QPTIFF omits it on 13 of a level's 4,920
++/// strips, and there the decoder runs straight on into the next strip's bytes
++/// and reports an invalid code. Stopping at the block's own decoded size makes
++/// the surplus input harmless, which is what libtiff does. Input running out is
++/// likewise an end rather than an error.
++pub fn decompress_lzw_limited(data: &[u8], limit: usize) -> Result<Vec<u8>> {
++    use weezl::{decode::Decoder, BitOrder, LzwStatus};
++
++    if limit == 0 {
++        return Ok(Vec::new());
++    }
+     let mut decoder = Decoder::with_tiff_size_switch(BitOrder::Msb, 8);
+-    decoder
+-        .decode(data)
+-        .map_err(|e| BioFormatsError::Codec(e.to_string()))
++    // A known block size is allocated outright; an unbounded call grows instead.
++    let mut out = vec![0u8; limit.min(1 << 16)];
++    let mut read = 0usize;
++    let mut written = 0usize;
++
++    loop {
++        if written == out.len() {
++            if out.len() >= limit {
++                break;
++            }
++            let grown = out.len().saturating_mul(2).min(limit);
++            out.resize(grown, 0);
++        }
++        let result = decoder.decode_bytes(&data[read..], &mut out[written..]);
++        read += result.consumed_in;
++        written += result.consumed_out;
++        match result.status {
++            Ok(LzwStatus::Ok) => {}
++            Ok(LzwStatus::Done | LzwStatus::NoProgress) => break,
++            Err(e) => return Err(BioFormatsError::Codec(e.to_string())),
++        }
++    }
++
++    out.truncate(written);
++    Ok(out)
+ }
+ 
+ /// Decompress Deflate/Zlib data (TIFF compression 8 = Deflate, 32946 = deflate without header).
 diff -ru orig/src/common/mod.rs new/src/common/mod.rs
---- a/src/common/mod.rs	2026-09-04 11:57:26
-+++ b/src/common/mod.rs	2026-09-04 11:57:26
+--- a/src/common/mod.rs	2026-09-04 13:46:02
++++ b/src/common/mod.rs	2026-09-04 13:46:02
 @@ -13,3 +13,34 @@
  pub mod region;
  pub mod writer;
@@ -37,8 +96,8 @@ diff -ru orig/src/common/mod.rs new/src/common/mod.rs
 +    }
 +}
 diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
---- a/src/formats/camera2.rs	2026-09-04 11:57:26
-+++ b/src/formats/camera2.rs	2026-09-04 11:57:26
+--- a/src/formats/camera2.rs	2026-09-04 13:46:02
++++ b/src/formats/camera2.rs	2026-09-04 13:46:02
 @@ -2289,9 +2289,9 @@
          drop(stream);
          drop(comp);
@@ -52,8 +111,8 @@ diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
              stream_path.replace(['/', '\\', ' '], "_")
          ));
 diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
---- a/src/formats/eps.rs	2026-09-04 11:57:26
-+++ b/src/formats/eps.rs	2026-09-04 11:57:26
+--- a/src/formats/eps.rs	2026-09-04 13:46:02
++++ b/src/formats/eps.rs	2026-09-04 13:46:02
 @@ -52,8 +52,8 @@
  
          // Delegate to the project TiffReader via a temporary file, since it
@@ -66,8 +125,8 @@ diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
  
          let result = (|| -> Result<(ImageMetadata, Vec<u8>)> {
 diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
---- a/src/formats/flim2.rs	2026-09-04 11:57:26
-+++ b/src/formats/flim2.rs	2026-09-04 11:57:26
+--- a/src/formats/flim2.rs	2026-09-04 13:46:02
++++ b/src/formats/flim2.rs	2026-09-04 13:46:02
 @@ -4224,9 +4224,9 @@
              ))
          })?;
@@ -81,8 +140,8 @@ diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
          ));
          std::fs::create_dir_all(&extracted_dir).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
---- a/src/formats/misc4.rs	2026-09-04 11:57:26
-+++ b/src/formats/misc4.rs	2026-09-04 11:57:26
+--- a/src/formats/misc4.rs	2026-09-04 13:46:02
++++ b/src/formats/misc4.rs	2026-09-04 13:46:02
 @@ -2184,10 +2184,10 @@
              && (bytes[..2] == *b"II" || bytes[..2] == *b"MM")
              && (bytes[2] == 42 || bytes[3] == 42);
@@ -97,8 +156,8 @@ diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
              ));
              std::fs::write(&tmp, &bytes).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
---- a/src/formats/olympus.rs	2026-09-04 11:57:26
-+++ b/src/formats/olympus.rs	2026-09-04 11:57:26
+--- a/src/formats/olympus.rs	2026-09-04 13:46:02
++++ b/src/formats/olympus.rs	2026-09-04 13:46:02
 @@ -915,10 +915,10 @@
                      Ok(bytes) => bytes,
                      Err(_) => return fv1000_blank_plane(meta),
@@ -140,8 +199,8 @@ diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
      let h = bytes
          .iter()
 diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.rs
---- a/src/formats/openslide_reader.rs	2026-09-04 11:57:26
-+++ b/src/formats/openslide_reader.rs	2026-09-04 11:57:26
+--- a/src/formats/openslide_reader.rs	2026-09-04 13:46:02
++++ b/src/formats/openslide_reader.rs	2026-09-04 13:46:02
 @@ -10,7 +10,7 @@
      use std::path::{Path, PathBuf};
  
@@ -256,8 +315,8 @@ diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.r
  
              for ch in 0..channel_count {
 diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
---- a/src/formats/zip.rs	2026-09-04 11:57:26
-+++ b/src/formats/zip.rs	2026-09-04 11:57:26
+--- a/src/formats/zip.rs	2026-09-04 13:46:02
++++ b/src/formats/zip.rs	2026-09-04 13:46:02
 @@ -159,9 +159,9 @@
  
          // Unique temp directory for this archive.
@@ -271,8 +330,8 @@ diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
          ));
          std::fs::create_dir_all(&dir).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/registry.rs new/src/registry.rs
---- a/src/registry.rs	2026-09-04 11:57:26
-+++ b/src/registry.rs	2026-09-04 11:57:26
+--- a/src/registry.rs	2026-09-04 13:46:02
++++ b/src/registry.rs	2026-09-04 13:46:02
 @@ -136,6 +136,23 @@
          return Ok(r);
      }
@@ -297,3 +356,18 @@ diff -ru orig/src/registry.rs new/src/registry.rs
      // ICS1 datasets are a text `.ics` header plus raw `.ids` pixels. The raw
      // companion has no ICS magic and can accidentally match unrelated byte
      // probes, but Java ICSReader accepts either side by suffix.
+diff -ru orig/src/tiff/compression.rs new/src/tiff/compression.rs
+--- a/src/tiff/compression.rs	2026-09-04 13:46:02
++++ b/src/tiff/compression.rs	2026-09-04 13:46:02
+@@ -55,7 +55,10 @@
+     let bits_per_pixel = samples_per_pixel as u32 * bits_per_sample as u32;
+     let mut out = match compression {
+         Compression::None => data.to_vec(),
+-        Compression::Lzw => decompress_lzw(data)?,
++        // Bounded by the block's decoded size: the strip reader deliberately
++        // over-reads compressed bytes, and a block whose stream carries no end
++        // marker would otherwise decode on into the next one.
++        Compression::Lzw => decompress_lzw_limited(data, expected_len)?,
+         Compression::Deflate => decompress_deflate(data)?,
+         Compression::DeflateOld => {
+             decompress_deflate_raw(data).or_else(|_| decompress_deflate(data))?

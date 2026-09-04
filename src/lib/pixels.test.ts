@@ -27,8 +27,21 @@ function info(overrides: Partial<SeriesInfo>): SeriesInfo {
 }
 
 describe('computeDisplayRange', () => {
-  it('leaves 8-bit data alone', () => {
-    expect(computeDisplayRange(new Uint8Array([0, 255]), info({}), 2)).toEqual(FULL_8_BIT);
+  it('leaves already-composited 8-bit RGB alone', () => {
+    // Windowing a brightfield image's channels separately would shift its
+    // colour balance, and it is already scaled for display.
+    expect(computeDisplayRange(new Uint8Array([0, 255]), info({ isRgb: true }), 2)).toEqual(
+      FULL_8_BIT,
+    );
+  });
+
+  it('windows an 8-bit fluorescence channel', () => {
+    // Akoya QPTIFF stores 8-bit planes whose signal sits far below full scale;
+    // at 0-255 the slide renders black.
+    const pixels = new Uint8Array([2, 9, 20, 33, 47, 61, 74, 88]);
+    const range = computeDisplayRange(pixels, info({ width: 8 }), pixels.length);
+    expect(range.max).toBeLessThanOrEqual(88);
+    expect(range.max).toBeGreaterThan(range.min);
   });
 
   it('finds the range actually used by 16-bit data', () => {

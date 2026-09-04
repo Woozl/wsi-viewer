@@ -85,8 +85,10 @@ export function useDisplay(
       return;
     }
     // Wait for the sampled windows: initialising twice would flash the slide at
-    // a default window before settling on the real one.
-    if (ranges.data === undefined) return;
+    // a default window before settling on the real one. A sample that failed
+    // still settles, and falls back to the full range below — waiting for data
+    // that will never arrive would leave the viewer blank instead.
+    if (ranges.isPending) return;
 
     const settings: ChannelSettings[] = displayed.map((index, position) => {
       const metadata = channels[index] ?? {
@@ -97,7 +99,7 @@ export function useDisplay(
         emissionWavelength: null,
         excitationWavelength: null,
       };
-      const range = ranges.data[position] ?? { min: 0, max: ceiling };
+      const range = ranges.data?.[position] ?? { min: 0, max: ceiling };
       return {
         index,
         label: channelLabel(metadata, position),
@@ -109,7 +111,18 @@ export function useDisplay(
       };
     });
     initialise(slideKey, settings);
-  }, [base, channels, ceiling, displayed, fluorescence, initialise, ranges.data, slideKey, storedKey]);
+  }, [
+    base,
+    channels,
+    ceiling,
+    displayed,
+    fluorescence,
+    initialise,
+    ranges.data,
+    ranges.isPending,
+    slideKey,
+    storedKey,
+  ]);
 
   return useMemo(
     () => ({

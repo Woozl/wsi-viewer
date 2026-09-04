@@ -182,6 +182,11 @@ function aspect(info: { width: number; height: number }): number {
  * reporting three resolutions. Flattening both into candidates and then grouping
  * by aspect ratio handles them with one rule, and keeps label and macro images —
  * which do not share the specimen's shape — out of the pyramid.
+ *
+ * Shape alone is not enough, though: a QPTIFF ships an RGB thumbnail of the
+ * whole slide, so its aspect ratio matches the specimen exactly while its pixels
+ * mean something entirely different from the 40-channel levels above it. A level
+ * must also agree with the base on what a pixel is.
  */
 export function buildSlideModel(
   series: readonly SeriesInfo[],
@@ -194,9 +199,23 @@ export function buildSlideModel(
   const base = bySize[0];
   if (base === undefined) throw new Error('slide exposes no readable levels');
   const baseAspect = aspect(base);
+  const infoFor = (entry: LevelCandidate): SeriesInfo | undefined =>
+    series.find((info) => info.series === entry.series);
+  const baseInfo = infoFor(base);
+
+  /** Whether two series describe the same kind of pixel. */
+  const samePixels = (candidate: SeriesInfo | undefined): boolean =>
+    baseInfo === undefined ||
+    candidate === undefined ||
+    (candidate.sizeC === baseInfo.sizeC &&
+      candidate.isRgb === baseInfo.isRgb &&
+      candidate.bitsPerPixel === baseInfo.bitsPerPixel);
 
   const sameShape = bySize.filter(
-    (entry) => baseAspect > 0 && Math.abs(aspect(entry) - baseAspect) / baseAspect <= ASPECT_TOLERANCE,
+    (entry) =>
+      baseAspect > 0 &&
+      Math.abs(aspect(entry) - baseAspect) / baseAspect <= ASPECT_TOLERANCE &&
+      samePixels(infoFor(entry)),
   );
   const pyramidSeries = new Set(sameShape.map((entry) => entry.series));
   const associated = series.filter((info) => !pyramidSeries.has(info.series));
