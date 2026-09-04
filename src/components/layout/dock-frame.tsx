@@ -1,14 +1,9 @@
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import { Dock } from './dock';
+import { usePanelDrag } from './use-panel-drag';
 import { cn } from '@/lib/utils';
 import { useLayoutStore } from '@/store/layout-store';
-import {
-  DOCK_SIDES,
-  PANEL_DRAG_TYPE,
-  panelsIn,
-  type DockSide,
-  type PanelId,
-} from '@/lib/layout';
+import { panelsIn, PANEL_TITLES, type DockSide, type PanelId } from '@/lib/layout';
 
 interface DockFrameProps {
   readonly content: Readonly<Record<PanelId, React.ReactNode>>;
@@ -16,18 +11,12 @@ interface DockFrameProps {
   readonly children: React.ReactNode;
 }
 
-const ZONE_CLASSES: Readonly<Record<DockSide, string>> = {
-  left: 'left-0 top-0 h-full w-1/4',
-  right: 'right-0 top-0 h-full w-1/4',
-  top: 'left-0 top-0 w-full h-1/4',
-  bottom: 'left-0 bottom-0 w-full h-1/4',
-};
-
-const ZONE_LABELS: Readonly<Record<DockSide, string>> = {
-  left: 'Dock panel to the left',
-  right: 'Dock panel to the right',
-  top: 'Dock panel to the top',
-  bottom: 'Dock panel to the bottom',
+/** Band highlighted along the edge a released panel would dock to. */
+const EDGE_CLASSES: Readonly<Record<DockSide, string>> = {
+  left: 'left-0 top-0 h-full w-24',
+  right: 'right-0 top-0 h-full w-24',
+  top: 'left-0 top-0 w-full h-20',
+  bottom: 'left-0 bottom-0 w-full h-20',
 };
 
 /**
@@ -41,23 +30,14 @@ export function DockFrame({ content, children }: DockFrameProps): React.JSX.Elem
   const move = useLayoutStore((state) => state.move);
   const toggle = useLayoutStore((state) => state.toggle);
   const resize = useLayoutStore((state) => state.resize);
-  const [dragging, setDragging] = useState(false);
-  const [hovered, setHovered] = useState<DockSide | null>(null);
 
   const onDrop = useCallback(
-    (side: DockSide) =>
-      (event: React.DragEvent<HTMLDivElement>): void => {
-        event.preventDefault();
-        const id = event.dataTransfer.getData(PANEL_DRAG_TYPE);
-        const panel = (['folders', 'slide', 'pyramid', 'associated', 'metadata'] as const).find(
-          (known) => known === id,
-        );
-        if (panel !== undefined) move(panel, side);
-        setDragging(false);
-        setHovered(null);
-      },
+    (panel: PanelId, side: DockSide, before: PanelId | undefined): void => {
+      move(panel, side, before);
+    },
     [move],
   );
+  const { drag, start } = usePanelDrag(onDrop);
 
   const dockFor = (side: DockSide): React.JSX.Element => (
     <Dock
@@ -66,17 +46,19 @@ export function DockFrame({ content, children }: DockFrameProps): React.JSX.Elem
       size={layout.sizes[side]}
       collapsed={layout.collapsed}
       content={content}
+      draggingPanel={drag?.panel ?? null}
+      dropTarget={drag?.target ?? null}
       onToggle={toggle}
       onMove={move}
       onResize={(size): void => {
         resize(side, size);
       }}
-      onDragStateChange={setDragging}
+      onDragStart={start}
     />
   );
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div data-dock-frame className="relative flex h-full min-h-0 flex-col">
       {dockFor('top')}
 
       <div className="flex min-h-0 flex-1">
@@ -87,35 +69,25 @@ export function DockFrame({ content, children }: DockFrameProps): React.JSX.Elem
 
       {dockFor('bottom')}
 
-      {/* Drop targets only exist mid-drag, so they never intercept a click. */}
-      {dragging && (
-        <div className="pointer-events-none absolute inset-0 z-20">
-          {DOCK_SIDES.map((side) => (
-            // Drop targets exist only while a drag is in flight. Keyboard users
-            // move panels through the "Move to" menu on each panel header, so
-            // these never need to be reachable.
-            // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+      {drag !== null && (
+        // Purely decorative feedback, and never interactive: hit-testing reads
+        // the element under the pointer, so an overlay that accepted events
+        // would mask the docks underneath it.
+        <div aria-hidden className="pointer-events-none fixed inset-0 z-50">
+          {drag.target !== null && (
             <div
-              key={side}
-              aria-label={ZONE_LABELS[side]}
-              onDragOver={(event): void => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-                setHovered(side);
-              }}
-              onDragLeave={(): void => {
-                setHovered((current) => (current === side ? null : current));
-              }}
-              onDrop={onDrop(side)}
               className={cn(
-                'pointer-events-auto absolute border-2 border-dashed transition-colors',
-                ZONE_CLASSES[side],
-                hovered === side
-                  ? 'border-ring bg-ring/20'
-                  : 'border-transparent bg-foreground/5',
+                'absolute border-2 border-dashed border-ring bg-ring/15',
+                EDGE_CLASSES[drag.target.side],
               )}
             />
-          ))}
+          )}
+          <div
+            className="absolute -translate-y-1/2 translate-x-3 rounded-md border bg-popover px-2 py-1 text-[11px] font-medium shadow-md"
+            style={{ left: drag.x, top: drag.y }}
+          >
+            {PANEL_TITLES[drag.panel]}
+          </div>
         </div>
       )}
     </div>

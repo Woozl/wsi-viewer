@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import Map from 'ol/Map';
+import { defaults as defaultInteractions } from 'ol/interaction/defaults';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/WebGLTile';
 import DataTileSource from 'ol/source/DataTile';
@@ -117,6 +118,13 @@ export function useSlideMap(
       view,
       // The default controls are replaced with themed React components.
       controls: [],
+      // OpenLayers builds its default interactions with `onFocusOnly: true`,
+      // and that condition requires focus only when the target carries a
+      // tabindex. The container has one so the arrow keys can pan it, which
+      // silently made wheel-zoom and drag-pan ignore the first gesture until
+      // the map had been clicked. The viewport owns its whole area here and the
+      // page does not scroll, so handling those immediately is correct.
+      interactions: defaultInteractions({ onFocusOnly: false }),
     });
     const restored = initialCamera;
     if (restored.x !== undefined && restored.y !== undefined && restored.r !== undefined) {

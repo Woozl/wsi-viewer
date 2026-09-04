@@ -44,14 +44,6 @@ export interface LayoutState {
   readonly sizes: Readonly<Record<DockSide, number>>;
 }
 
-/**
- * Drag payload type for a panel header.
- *
- * A custom type rather than "text/plain" so the docks only accept panels, and
- * text dragged in from elsewhere is ignored.
- */
-export const PANEL_DRAG_TYPE = 'application/x-wsi-panel';
-
 /** Below this a dock cannot show anything useful. */
 export const MIN_DOCK_SIZE = 180;
 
@@ -172,4 +164,53 @@ export function reconcileLayout(stored: unknown): LayoutState {
   }
 
   return { placement, order, collapsed, sizes };
+}
+
+/** One panel's extent along its dock's main axis, in client pixels. */
+export interface PanelExtent {
+  readonly id: PanelId;
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Which panel a drop at `position` should land before, or null to append.
+ *
+ * Compares against each panel's midpoint so the insertion point flips as the
+ * pointer passes the middle of a panel, which is what makes the indicator feel
+ * like it is tracking the cursor rather than snapping late.
+ */
+export function insertionTarget(
+  extents: readonly PanelExtent[],
+  position: number,
+): PanelId | null {
+  for (const extent of extents) {
+    if (position < (extent.start + extent.end) / 2) return extent.id;
+  }
+  return null;
+}
+
+export interface Rect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The edge of `frame` nearest to `pointer`.
+ *
+ * Used when a panel is dragged over the viewport rather than over an existing
+ * dock, so releasing there docks it to the side being approached.
+ */
+export function nearestSide(frame: Rect, pointer: { x: number; y: number }): DockSide {
+  const distances: Readonly<Record<DockSide, number>> = {
+    left: pointer.x - frame.x,
+    right: frame.x + frame.width - pointer.x,
+    top: pointer.y - frame.y,
+    bottom: frame.y + frame.height - pointer.y,
+  };
+  return DOCK_SIDES.reduce((closest, side) =>
+    distances[side] < distances[closest] ? side : closest,
+  );
 }

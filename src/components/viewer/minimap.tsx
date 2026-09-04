@@ -29,6 +29,11 @@ interface MinimapProps {
   readonly slideKey: string;
 }
 
+/** OpenLayers types this as non-nullable, so its shape is verified here. */
+function isCoordinate(value: unknown): value is [number, number] {
+  return Array.isArray(value) && typeof value[0] === 'number' && typeof value[1] === 'number';
+}
+
 /** Fits the slide into the overview box, preserving aspect ratio. */
 function overviewSize(model: SlideModel): { width: number; height: number } {
   const scale = Math.min(MAX_WIDTH / model.width, MAX_HEIGHT / model.height);
@@ -102,21 +107,23 @@ export function Minimap({ map, model, client, slideKey }: MinimapProps): React.J
 
     // The four viewport corners are converted through the map itself, so the
     // indicator follows rotation without any trigonometry here.
-    const corners = (
-      [
-        [0, 0],
-        [viewWidth, 0],
-        [viewWidth, viewHeight],
-        [0, viewHeight],
-      ] as const
-    ).map(([x, y]) => {
-      const [mapX, mapY] = map.getCoordinateFromPixel([x, y]);
+    const corners: [number, number][] = [];
+    for (const [x, y] of [
+      [0, 0],
+      [viewWidth, 0],
+      [viewWidth, viewHeight],
+      [0, viewHeight],
+    ]) {
+      // Typed as non-nullable, but it really does return null until the map has
+      // rendered its first frame, so the value is checked rather than trusted.
+      // The overview image is already painted; the indicator just waits for the
+      // next postrender.
+      const coordinate: unknown = map.getCoordinateFromPixel([x ?? 0, y ?? 0]);
+      if (!isCoordinate(coordinate)) return;
+      const [mapX, mapY] = coordinate;
       // Map coordinates run negative downwards; the overview is top-left origin.
-      return [
-        ((mapX ?? 0) / model.width) * width,
-        (-(mapY ?? 0) / model.height) * height,
-      ] as const;
-    });
+      corners.push([(mapX / model.width) * width, (-mapY / model.height) * height]);
+    }
 
     const xs = corners.map(([x]) => x);
     const ys = corners.map(([, y]) => y);

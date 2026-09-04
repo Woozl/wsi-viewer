@@ -152,3 +152,61 @@ test('collapses a panel to its header', async ({ page }) => {
   await expect(folders.getByRole('button', { name: 'Add folder' })).toBeHidden();
   await expect(page.getByRole('button', { name: 'Expand Folders' })).toBeVisible();
 });
+
+test('drags a panel to another dock, showing where it will land', async ({ page }) => {
+  await page.goto('./');
+
+  const folders = page.getByRole('region', { name: 'Folders' });
+  await expect(folders).toBeVisible();
+  await expect(page.getByRole('separator', { name: 'Resize the left panel' })).toBeVisible();
+
+  const header = folders.getByRole('heading', { name: 'Folders' });
+  const grip = await header.boundingBox();
+  expect(grip).not.toBeNull();
+  if (grip === null) return;
+
+  const viewport = page.viewportSize();
+  expect(viewport).not.toBeNull();
+  if (viewport === null) return;
+
+  // Press, then move in steps: the drag only engages past a small threshold, so
+  // a single jump would look like a click.
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(viewport.width / 2, viewport.height - 200, { steps: 8 });
+  await page.mouse.move(viewport.width / 2, viewport.height - 40, { steps: 8 });
+
+  // Feedback appears while the pointer is still down.
+  await expect(page.getByText('Folders', { exact: true }).last()).toBeVisible();
+
+  await page.mouse.up();
+
+  // The panel now lives in the bottom dock, and the left dock is gone with it.
+  await expect(page.getByRole('separator', { name: 'Resize the bottom panel' })).toBeVisible();
+  await expect(page.getByRole('separator', { name: 'Resize the left panel' })).toBeHidden();
+  await expect(folders.getByRole('button', { name: 'Add folder' })).toBeVisible();
+});
+
+test('zooms with the wheel without needing a click first', async ({ page }) => {
+  await page.goto('./');
+  await page.getByLabel('Choose a whole-slide image').setInputFiles(FIXTURE);
+
+  const viewer = page.getByRole('application', { name: /Slide viewer/ });
+  await expect(viewer).toBeVisible({ timeout: 60_000 });
+
+  const readResolution = (): string | null => new URL(page.url()).searchParams.get('r');
+  await expect.poll(readResolution, { timeout: 15_000 }).not.toBeNull();
+  const before = Number(readResolution());
+
+  // Deliberately no click. OpenLayers builds its default interactions with
+  // onFocusOnly, which requires focus whenever the target carries a tabindex —
+  // and the viewer has one so the arrow keys can pan it. Without overriding
+  // that, the first gesture on a freshly opened slide is swallowed.
+  const box = await viewer.boundingBox();
+  expect(box).not.toBeNull();
+  if (box === null) return;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, -400);
+
+  await expect.poll(() => Number(readResolution()), { timeout: 15_000 }).toBeLessThan(before);
+});
