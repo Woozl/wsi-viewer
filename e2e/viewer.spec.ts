@@ -69,8 +69,9 @@ test('opens a pyramidal slide and renders tiles', async ({ page }) => {
     .poll(
       async () =>
         page.evaluate(() => {
-          const canvas = document.querySelector('canvas');
-          if (canvas === null) return 0;
+          // The map's own canvas, not the overview's.
+          const canvas = document.querySelector('.ol-viewport canvas');
+          if (!(canvas instanceof HTMLCanvasElement)) return 0;
           const probe = document.createElement('canvas');
           probe.width = canvas.width;
           probe.height = canvas.height;
@@ -288,4 +289,45 @@ test('offers a single adjustment for brightfield slides', async ({ page }) => {
   // A brightfield image has no separate planes to colour, so it gets one window.
   await expect(channels).toContainText('brightfield');
   await expect(channels.getByRole('button', { name: /^Hide Channel/ })).toHaveCount(0);
+});
+
+/**
+ * Optional check against a real Aperio slide, which is far too large to commit.
+ *
+ * Set WSI_SVS_FIXTURE to its path to run it. Worth having because Aperio takes
+ * the compressed JPEG passthrough, and nothing that can be generated here does:
+ * the bundled TIFF writer offers only None, Deflate and LZW, none of which are
+ * block codecs the reader will hand over uncompressed.
+ */
+test('renders a real Aperio slide through the compressed path', async ({ page }) => {
+  const fixture = process.env.WSI_SVS_FIXTURE;
+  test.skip(fixture === undefined, 'set WSI_SVS_FIXTURE to a .svs path to run');
+  if (fixture === undefined) return;
+
+  await page.goto('./');
+  await page.getByLabel('Choose a whole-slide image').setInputFiles(fixture);
+  await expect(page.getByRole('region', { name: 'Slide' })).toContainText('gigapixel', {
+    timeout: 90_000,
+  });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const canvas = document.querySelector('.ol-viewport canvas');
+          if (!(canvas instanceof HTMLCanvasElement)) return 0;
+          const probe = document.createElement('canvas');
+          probe.width = canvas.width;
+          probe.height = canvas.height;
+          const context = probe.getContext('2d');
+          if (context === null) return 0;
+          context.drawImage(canvas, 0, 0);
+          const { data } = context.getImageData(0, 0, probe.width, probe.height);
+          let opaque = 0;
+          for (let i = 3; i < data.length; i += 4) if ((data[i] ?? 0) > 0) opaque += 1;
+          return opaque;
+        }),
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThan(1000);
 });

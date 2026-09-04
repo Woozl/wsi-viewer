@@ -176,10 +176,17 @@ export function useSlideMap(
 
   // Source and style follow the channel structure. Swapping them in place keeps
   // the camera and avoids a full rebuild every time channels resolve.
+  //
+  // `map` is a dependency rather than just a guard: the container arrives on a
+  // later render, so the layer does not exist the first time this runs. Without
+  // it, a slide whose structure never changes — any brightfield image — would
+  // bail out here once and never be given a source at all.
   useEffect(() => {
     const layer = layerRef.current;
     const grid = gridRef.current;
-    if (layer === null || grid === null || model === null || client === null) return;
+    if (map === null || layer === null || grid === null || model === null || client === null) {
+      return;
+    }
 
     const current = displayRef.current;
     const fluorescence = current.mode === 'fluorescence';
@@ -236,7 +243,7 @@ export function useSlideMap(
     return (): void => {
       source.dispose();
     };
-  }, [model, client, structureKey]);
+  }, [map, model, client, structureKey]);
 
   // Sliders only move uniforms, so adjusting a window or a colour repaints
   // without recompiling the shader or refetching any tiles.

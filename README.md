@@ -35,7 +35,8 @@ Requires Node 22+ and a Rust toolchain with the `wasm32-wasip1` target
 | `npm run dev` | Vite dev server |
 | `npm run build` | WASM + typecheck + production build |
 | `npm test` | Unit tests |
-| `npm run test:e2e` | Generate a fixture slide and run Playwright |
+| `npm run test:e2e` | Generate fixture slides and run Playwright |
+| `WSI_SVS_FIXTURE=<path> npm run test:e2e` | Also check a real Aperio slide |
 | `npm run smoke:wasm -- <slide>` | Open a slide through Node's WASI, outside the browser |
 
 ## How it works
