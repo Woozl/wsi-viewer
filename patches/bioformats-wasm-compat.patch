@@ -1,6 +1,6 @@
 diff -ru orig/src/common/mod.rs new/src/common/mod.rs
---- a/src/common/mod.rs	2026-09-04 11:04:16
-+++ b/src/common/mod.rs	2026-09-04 11:04:16
+--- a/src/common/mod.rs	2026-09-04 11:57:26
++++ b/src/common/mod.rs	2026-09-04 11:57:26
 @@ -13,3 +13,34 @@
  pub mod region;
  pub mod writer;
@@ -37,8 +37,8 @@ diff -ru orig/src/common/mod.rs new/src/common/mod.rs
 +    }
 +}
 diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
---- a/src/formats/camera2.rs	2026-09-04 11:04:15
-+++ b/src/formats/camera2.rs	2026-09-04 11:04:16
+--- a/src/formats/camera2.rs	2026-09-04 11:57:26
++++ b/src/formats/camera2.rs	2026-09-04 11:57:26
 @@ -2289,9 +2289,9 @@
          drop(stream);
          drop(comp);
@@ -52,8 +52,8 @@ diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
              stream_path.replace(['/', '\\', ' '], "_")
          ));
 diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
---- a/src/formats/eps.rs	2026-09-04 11:04:15
-+++ b/src/formats/eps.rs	2026-09-04 11:04:16
+--- a/src/formats/eps.rs	2026-09-04 11:57:26
++++ b/src/formats/eps.rs	2026-09-04 11:57:26
 @@ -52,8 +52,8 @@
  
          // Delegate to the project TiffReader via a temporary file, since it
@@ -66,8 +66,8 @@ diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
  
          let result = (|| -> Result<(ImageMetadata, Vec<u8>)> {
 diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
---- a/src/formats/flim2.rs	2026-09-04 11:04:15
-+++ b/src/formats/flim2.rs	2026-09-04 11:04:16
+--- a/src/formats/flim2.rs	2026-09-04 11:57:26
++++ b/src/formats/flim2.rs	2026-09-04 11:57:26
 @@ -4224,9 +4224,9 @@
              ))
          })?;
@@ -81,8 +81,8 @@ diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
          ));
          std::fs::create_dir_all(&extracted_dir).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
---- a/src/formats/misc4.rs	2026-09-04 11:04:15
-+++ b/src/formats/misc4.rs	2026-09-04 11:04:16
+--- a/src/formats/misc4.rs	2026-09-04 11:57:26
++++ b/src/formats/misc4.rs	2026-09-04 11:57:26
 @@ -2184,10 +2184,10 @@
              && (bytes[..2] == *b"II" || bytes[..2] == *b"MM")
              && (bytes[2] == 42 || bytes[3] == 42);
@@ -97,8 +97,8 @@ diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
              ));
              std::fs::write(&tmp, &bytes).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
---- a/src/formats/olympus.rs	2026-09-04 11:04:15
-+++ b/src/formats/olympus.rs	2026-09-04 11:04:16
+--- a/src/formats/olympus.rs	2026-09-04 11:57:26
++++ b/src/formats/olympus.rs	2026-09-04 11:57:26
 @@ -915,10 +915,10 @@
                      Ok(bytes) => bytes,
                      Err(_) => return fv1000_blank_plane(meta),
@@ -140,8 +140,17 @@ diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
      let h = bytes
          .iter()
 diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.rs
---- a/src/formats/openslide_reader.rs	2026-09-04 11:04:15
-+++ b/src/formats/openslide_reader.rs	2026-09-04 11:04:16
+--- a/src/formats/openslide_reader.rs	2026-09-04 11:57:26
++++ b/src/formats/openslide_reader.rs	2026-09-04 11:57:26
+@@ -10,7 +10,7 @@
+     use std::path::{Path, PathBuf};
+ 
+     use openslide_pure_rs::compressed as os_compressed;
+-    use openslide_pure_rs::OpenSlide;
++    use openslide_pure_rs::{properties, OpenSlide};
+ 
+     use crate::common::compressed::{
+         CompressedBytes, CompressedExtractionConstraint, CompressedExtractionSupport,
 @@ -18,7 +18,7 @@
          Jpeg2000Container, JpegColorSpace, JpegSubsampling, LossyCodec,
      };
@@ -151,7 +160,37 @@ diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.r
      use crate::common::pixel_type::PixelType;
      use crate::common::reader::FormatReader;
  
-@@ -192,6 +192,15 @@
+@@ -155,6 +155,29 @@
+         }
+     }
+ 
++    /// The scanner's fill colour, which is what an unscanned margin shows.
++    ///
++    /// Brightfield slides are lit through the glass, so white is the right
++    /// assumption when a format declares nothing.
++    fn background_rgb(slide: &OpenSlide) -> [u8; 3] {
++        const WHITE: [u8; 3] = [255, 255, 255];
++        let Some(hex) = slide.property_value(properties::PROPERTY_BACKGROUND_COLOR) else {
++            return WHITE;
++        };
++        let hex = hex.trim();
++        if hex.len() != 6 || !hex.is_ascii() {
++            return WHITE;
++        }
++        match (
++            u8::from_str_radix(&hex[0..2], 16),
++            u8::from_str_radix(&hex[2..4], 16),
++            u8::from_str_radix(&hex[4..6], 16),
++        ) {
++            (Ok(r), Ok(g), Ok(b)) => [r, g, b],
++            _ => WHITE,
++        }
++    }
++
+     impl FormatReader for OpenSlideReader {
+         fn is_this_type_by_name(&self, path: &Path) -> bool {
+             path.extension()
+@@ -192,6 +215,15 @@
  
              let channel_count = slide.channel_count();
  
@@ -167,7 +206,7 @@ diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.r
              let meta = ImageMetadata {
                  size_x: w0,
                  size_y: h0,
-@@ -207,6 +216,7 @@
+@@ -207,6 +239,7 @@
                  is_indexed: false,
                  is_little_endian: true,
                  resolution_count: level_count,
@@ -175,9 +214,50 @@ diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.r
                  ..Default::default()
              };
  
+@@ -279,9 +312,39 @@
+             let y0 = (y as f64 * downsample) as i64;
+ 
+             let channel_count = slide.channel_count();
++            let size = w as usize * h as usize;
+ 
++            // A three-channel slide is brightfield RGB. Reading it through the
++            // RGBA entry point keeps the alpha saying which pixels a tile
++            // actually covered, so the scanner's own fill colour can be laid
++            // under the unscanned margin. Interleaving the channels separately
++            // would discard that and leave the margin black.
++            if channel_count == 3 {
++                let background = background_rgb(slide);
++                let rgba = slide
++                    .read_region_rgba([Some(0), Some(1), Some(2), None], x0, y0, level, w, h)
++                    .map_err(|e| {
++                        BioFormatsError::Format(format!("OpenSlide read_region_rgba: {}", e))
++                    })?;
++                let mut out = vec![0u8; size * 3];
++                for i in 0..size {
++                    let src = i * 4;
++                    if src + 3 >= rgba.data.len() {
++                        break;
++                    }
++                    // Samples arrive unpremultiplied, so this is a plain
++                    // source-over of the tile onto the fill colour.
++                    let coverage = f32::from(rgba.data[src + 3]) / 255.0;
++                    for component in 0..3 {
++                        let over = f32::from(rgba.data[src + component]) * coverage;
++                        let under = f32::from(background[component]) * (1.0 - coverage);
++                        out[i * 3 + component] = (over + under).min(255.0) as u8;
++                    }
++                }
++                return Ok(out);
++            }
++
+             // Read all channels and interleave into RGB(A) bytes
+-            let size = w as usize * h as usize;
+             let mut out = vec![0u8; size * channel_count as usize];
+ 
+             for ch in 0..channel_count {
 diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
---- a/src/formats/zip.rs	2026-09-04 11:04:15
-+++ b/src/formats/zip.rs	2026-09-04 11:04:16
+--- a/src/formats/zip.rs	2026-09-04 11:57:26
++++ b/src/formats/zip.rs	2026-09-04 11:57:26
 @@ -159,9 +159,9 @@
  
          // Unique temp directory for this archive.
@@ -191,8 +271,8 @@ diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
          ));
          std::fs::create_dir_all(&dir).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/registry.rs new/src/registry.rs
---- a/src/registry.rs	2026-09-04 11:04:16
-+++ b/src/registry.rs	2026-09-04 11:04:16
+--- a/src/registry.rs	2026-09-04 11:57:26
++++ b/src/registry.rs	2026-09-04 11:57:26
 @@ -136,6 +136,23 @@
          return Ok(r);
      }

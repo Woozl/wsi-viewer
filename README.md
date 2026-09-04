@@ -88,6 +88,16 @@ to a JPEG reader that duly reports the overview's dimensions instead of the
 slide's. The registry therefore matches the extension before it sniffs, the same
 way it already special-cases file patterns and ICS.
 
+**An unscanned margin is filled, not left black.** A slide is a rectangle around
+whatever the scanner visited, and on these MIRAX slides the tissue occupies a
+strip of a 289,792 x 620,544 canvas. OpenSlide leaves the rest transparent and
+expects the caller to composite, so reading it as three separate channels drops
+the alpha that says which pixels a tile ever covered and the margin comes out
+black. The bridge reads brightfield slides through the RGBA entry point instead
+and lays them over `openslide.background-color` — `IMAGE_FILL_COLOR_BGR` in the
+slide's own `Slidedat.ini`, white on both samples here. It decodes each tile once
+as RGB rather than three times as a channel, so it is cheaper too.
+
 **Small reads are buffered.** Reads are served by slicing a `File`, and a
 `FileReaderSync` call costs about the same whatever its size, so a reader that
 walks its index one scalar at a time is pathological: MIRAX issues over half a
@@ -152,11 +162,6 @@ readers such as `NdpiReader` that also inspect file contents inside
   routes just `.mrxs` to its OpenSlide reader; Ventana, Trestle, Sakura, Philips
   and the rest go to native readers with fuller Bio-Formats metadata, and those
   readers are what limits them, not the port.
-- A MIRAX slide's unscanned margin renders black. OpenSlide reports it as
-  transparent, but the bridge into bioformats reads three channels and so drops
-  the alpha that would say which pixels are background. Nothing distinguishes
-  unscanned from genuinely black afterwards, so it is left as the reader
-  reported it rather than guessed at.
 - Formats whose data lives in a sibling folder (MIRAX, OIF, AFI, NDPIS) can only
   be opened through the Folders panel, since the file input hands over a single
   file with no way to reach its siblings.
