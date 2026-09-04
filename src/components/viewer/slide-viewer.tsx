@@ -5,6 +5,7 @@ import { Minimap } from './minimap';
 import type { SlideModel } from '@/lib/slide';
 import type { SlideClient } from '@/lib/wasm/client';
 import type { ViewSearch } from '@/lib/view-state';
+import type { DisplaySettings } from '@/lib/channels';
 
 interface SlideViewerProps {
   readonly model: SlideModel;
@@ -13,6 +14,7 @@ interface SlideViewerProps {
   readonly onCameraChange: (camera: CameraChange) => void;
   /** Identifies the slide, so the overview image is cached per file. */
   readonly slideKey: string;
+  readonly display: DisplaySettings;
 }
 
 export function SlideViewer({
@@ -21,11 +23,12 @@ export function SlideViewer({
   camera,
   onCameraChange,
   slideKey,
+  display,
 }: SlideViewerProps): React.JSX.Element {
   // Callback ref rather than useRef: the map must be built only once the node
   // exists, and a ref object would not re-run the effect when it appears.
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
-  const { map } = useSlideMap(container, model, client, camera, onCameraChange);
+  const { map } = useSlideMap(container, model, client, camera, onCameraChange, display);
 
   return (
     <div className="relative h-full w-full">

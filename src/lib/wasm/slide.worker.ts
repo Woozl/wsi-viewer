@@ -16,7 +16,14 @@ import {
   type SeriesInfo,
 } from '../slide';
 import { bool, isRecord, parseRecord } from '../json';
-import { computeDisplayRange, FULL_8_BIT, toRgba, type DisplayRange } from '../pixels';
+import { parseChannels } from '../channels';
+import {
+  computeDisplayRange,
+  FULL_8_BIT,
+  readPlaneFloats,
+  toRgba,
+  type DisplayRange,
+} from '../pixels';
 import type { DetectResult, WorkerRequest, WorkerResponse } from './protocol';
 
 
@@ -192,6 +199,84 @@ function displayRangeFor(active: SlideCore, series: number, info: SeriesInfo): D
   return range;
 }
 
+/**
+ * Samples each channel to pick a sensible starting window.
+ *
+ * Read from a coarse level so it costs one small decode per channel: the point
+ * is a usable default the moment a slide opens, which is what the "auto" button
+ * in a microscopy viewer does.
+ */
+function channelRanges(
+  active: SlideCore,
+  series: number,
+  resolution: number,
+  planes: readonly number[],
+): DisplayRange[] {
+  const info = seriesInfo.find((entry) => entry.series === series);
+  if (info === undefined) throw new Error(`unknown series ${String(series)}`);
+
+  const level = levelCandidates.find(
+    (entry) => entry.series === series && entry.resolution === resolution,
+  );
+  const width = Math.min(SAMPLE_EXTENT, level?.width ?? info.width);
+  const height = Math.min(SAMPLE_EXTENT, level?.height ?? info.height);
+  const handle = handleFor(active, series, resolution);
+
+  return planes.map((plane) => {
+    const pixels = active.readRegion(handle, plane, 0, 0, width, height);
+    return computeDisplayRange(pixels, info, width * height);
+  });
+}
+
+/**
+ * Serves a tile as interleaved float bands, one per channel.
+ *
+ * Values are left in the file's own units: the display window is applied on the
+ * GPU, so changing it must not require re-reading the slide.
+ */
+function readBandTile(
+  active: SlideCore,
+  request: {
+    series: number;
+    resolution: number;
+    col: number;
+    row: number;
+    tileWidth: number;
+    tileHeight: number;
+    levelWidth: number;
+    levelHeight: number;
+    planes: readonly number[];
+  },
+): Float32Array<ArrayBuffer> | null {
+  const info = seriesInfo.find((entry) => entry.series === request.series);
+  if (info === undefined) throw new Error(`unknown series ${String(request.series)}`);
+
+  const x = request.col * request.tileWidth;
+  const y = request.row * request.tileHeight;
+  if (x >= request.levelWidth || y >= request.levelHeight) return null;
+
+  const width = Math.min(request.tileWidth, request.levelWidth - x);
+  const height = Math.min(request.tileHeight, request.levelHeight - y);
+  const bands = request.planes.length;
+  const handle = handleFor(active, request.series, request.resolution);
+
+  // Always full tile size: OpenLayers expects every tile to match the grid, so
+  // a clipped edge tile is written into the corner and the rest left at zero.
+  const out = new Float32Array(request.tileWidth * request.tileHeight * bands);
+  for (const [band, plane] of request.planes.entries()) {
+    const pixels = active.readRegion(handle, plane, x, y, width, height);
+    const values = readPlaneFloats(pixels, info, width * height);
+    for (let row = 0; row < height; row += 1) {
+      const source = row * width;
+      const destination = row * request.tileWidth * bands + band;
+      for (let column = 0; column < width; column += 1) {
+        out[destination + column * bands] = values[source + column] ?? 0;
+      }
+    }
+  }
+  return out;
+}
+
 /** Serves a tile by decoding a region, for levels with no compressed blocks. */
 async function readRegionTile(
   active: SlideCore,
@@ -285,6 +370,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           // costs one header read rather than a second worker and compile.
           const detection = await detect(active, request.file);
           const probe = active.open();
+          // Channels are read from the base series; every pyramid level of a
+          // given image shares them.
+          const channels = parseChannels(active.channelsJson(probe));
           const series = parseAllSeries(active.allSeriesJson(probe));
           seriesInfo = series;
           displayRanges.clear();
@@ -309,18 +397,21 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             id: request.id,
             ok: true,
             kind: 'open',
-            value: { detection, series, candidates },
+            value: { detection, channels, series, candidates },
           });
           return;
         }
         case 'tile': {
           if (core === null) throw new Error('no slide is open');
-          const bitmap = request.compressed
-            ? await readTile(core, request.series, request.resolution, request.col, request.row)
-            : await readRegionTile(core, request);
+          const value =
+            request.planes.length > 0
+              ? readBandTile(core, request)
+              : request.compressed
+                ? await readTile(core, request.series, request.resolution, request.col, request.row)
+                : await readRegionTile(core, request);
           reply(
-            { id: request.id, ok: true, kind: 'tile', value: bitmap },
-            bitmap === null ? [] : [bitmap],
+            { id: request.id, ok: true, kind: 'tile', value },
+            value === null ? [] : [value instanceof Float32Array ? value.buffer : value],
           );
           return;
         }
@@ -345,6 +436,16 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
             { id: request.id, ok: true, kind: 'thumbnail', value: bitmap },
             bitmap === null ? [] : [bitmap],
           );
+          return;
+        }
+        case 'channelRanges': {
+          if (core === null) throw new Error('no slide is open');
+          reply({
+            id: request.id,
+            ok: true,
+            kind: 'channelRanges',
+            value: channelRanges(core, request.series, request.resolution, request.planes),
+          });
           return;
         }
         case 'close': {

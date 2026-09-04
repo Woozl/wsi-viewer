@@ -12,6 +12,8 @@ to WebAssembly; no server sees the data, and the build output is static files.
 - Shows the slide's full format metadata, pyramid layout and associated images
 - Overview map showing where the viewport sits, with click-to-navigate
 - Dockable panels: drag any section to any edge, collapse it, or resize the dock
+- Multichannel fluorescence: per-channel colour, display window and gamma,
+  composited on the GPU
 - Reads whole folders through the File System Access API, remembering them
   between visits
 - Light, dark and system themes; keyboard-navigable throughout
@@ -79,6 +81,23 @@ on each header is the keyboard equivalent. The layout persists to localStorage
 and is repaired on load, so a renamed or newly added panel cannot strand anyone
 with an arrangement that never shows it.
 
+**Channels are composited on the GPU.** Fluorescence formats store each channel
+as its own plane, so the viewer uploads one texture band per channel and lets a
+WebGL style combine them. Colour, window and gamma are shader uniforms, which is
+what makes dragging a slider a uniform update rather than a re-decode of every
+visible tile. Compositing is additive, because that is what the instrument does:
+two fluorophores in the same place emit together, so green over red reads yellow.
+
+Default colours come from the file wherever it says anything — an explicit OME
+channel colour first, then the emission wavelength, then a fallback palette.
+Formats often record only the excitation wavelength, which is shorter than what
+the eye would see, so it is shifted by a typical Stokes shift before being
+converted; 405 nm excitation is a blue DAPI channel, not a violet one. Windows
+are sampled from the image when it opens, so a slide is legible immediately.
+
+Brightfield slides keep the compressed JPEG path and get one window over the
+already-composited RGB, which is what keeps gigapixel brightfield usable.
+
 **The format list is derived, not written by hand.** `scripts/build-wasm.mjs`
 probes every registered reader with candidate extensions harvested from the crate
 source and records the ones a reader claims. A documented supplement covers
@@ -99,10 +118,11 @@ readers such as `NdpiReader` that also inspect file contents inside
 - The URL records the camera but cannot record the slide, because a `File`
   handle is not revivable. A shared link restores the view once the same slide
   is reopened.
-- High-bit-depth images are auto-levelled: a display range is sampled once per
-  series from its coarsest level, with the extreme 0.2% trimmed from each end,
-  and every tile is stretched using it. That is a global auto-contrast, not
-  per-channel windowing, and the range cannot yet be adjusted by hand.
+- At most eight channels are displayed at once. Each costs a texture band and a
+  set of uniforms, and highly multiplexed panels are read a few markers at a
+  time; choosing which subset to show is not implemented yet.
+- Z-stacks and time series are read at z = 0, t = 0. The plane indexing handles
+  them, but nothing in the interface selects a plane.
 
 ## Licence
 

@@ -6,16 +6,27 @@
  * coordinates are image pixels with y increasing downwards from the top-left.
  * Tile resolutions come from the reconstructed pyramid, so OpenLayers requests
  * exactly the levels the file actually stores and interpolates between them.
+ *
+ * The map is built once per slide. Channel changes swap the layer's source and
+ * style in place: recreating the map would drop the camera, refetch every tile
+ * and flash the viewport each time a channel appeared.
  */
 import { useEffect, useRef, useState } from 'react';
 import Map from 'ol/Map';
-import { defaults as defaultInteractions } from 'ol/interaction/defaults';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/WebGLTile';
 import DataTileSource from 'ol/source/DataTile';
 import TileGrid from 'ol/tilegrid/TileGrid';
 import Projection from 'ol/proj/Projection';
-import { levelResolutions, zoomBounds, ZOOM_FACTOR, type SlideModel } from '@/lib/slide';
+import { defaults as defaultInteractions } from 'ol/interaction/defaults';
+import { levelResolutions, zoomBounds, type PyramidLevel, type SlideModel } from '@/lib/slide';
+import { planeIndex, type DisplaySettings } from '@/lib/channels';
+import {
+  brightfieldVariables,
+  buildBrightfieldStyle,
+  buildFluorescenceStyle,
+  channelVariables,
+} from '@/lib/channel-style';
 import { roundCamera, type ViewSearch } from '@/lib/view-state';
 import type { SlideClient } from '@/lib/wasm/client';
 
@@ -30,26 +41,45 @@ export interface CameraChange {
   readonly rot: number;
 }
 
+/** Everything the source builder needs, captured when the map is created. */
+interface Grid {
+  readonly tileGrid: TileGrid;
+  readonly projection: Projection;
+  /** Coarsest first, matching the tile grid's resolutions. */
+  readonly levels: readonly PyramidLevel[];
+}
+
 export function useSlideMap(
   container: HTMLDivElement | null,
   model: SlideModel | null,
   client: SlideClient | null,
   camera: ViewSearch,
   onCameraChange: (camera: CameraChange) => void,
+  display: DisplaySettings,
 ): SlideMapHandle {
-  // The map is an external resource created in an effect and published to
-  // state. A ref would not re-render the controls when the map appears, and
-  // reading `ref.current` during render is not allowed.
   const [map, setMap] = useState<Map | null>(null);
-  // The camera is read once, when the map is built, and written continuously
-  // afterwards. Capturing the initial value in state and holding the callback in
-  // a ref keeps both out of the effect's dependencies, so panning never tears
-  // the map down and rebuilds it.
+  const layerRef = useRef<TileLayer | null>(null);
+  const gridRef = useRef<Grid | null>(null);
+
+  // Read once when the map is built, then written continuously; holding the
+  // callback in a ref keeps it out of the effect's dependencies so panning never
+  // tears the map down.
   const [initialCamera] = useState(camera);
   const notifyCamera = useRef(onCameraChange);
   useEffect(() => {
     notifyCamera.current = onCameraChange;
   }, [onCameraChange]);
+
+  // The shader is compiled from the channel *structure*, so the source and style
+  // are rebuilt only when that changes. Anything a slider touches is a uniform.
+  const structureKey =
+    display.mode === 'brightfield'
+      ? 'brightfield'
+      : display.channels.map((channel) => channel.index).join(',');
+  const displayRef = useRef(display);
+  useEffect(() => {
+    displayRef.current = display;
+  }, [display]);
 
   useEffect(() => {
     if (container === null || model === null || client === null) return;
@@ -60,61 +90,31 @@ export function useSlideMap(
     // Coarsest first, as TileGrid requires; `levels` is finest first.
     const resolutions = levelResolutions(model);
     const reversed = [...model.levels].reverse();
-    const tileSizes = reversed.map((level): [number, number] => [
-      level.tileWidth,
-      level.tileHeight,
-    ]);
-
     const tileGrid = new TileGrid({
       extent,
       origin: [0, 0],
       resolutions,
-      tileSizes,
+      tileSizes: reversed.map((level): [number, number] => [level.tileWidth, level.tileHeight]),
     });
-
-    const source = new DataTileSource({
-      tileGrid,
-      projection,
-      // Tiles arrive as decoded ImageBitmaps from the worker.
-      loader: async (z, x, y) => {
-        const level = reversed[z];
-        if (level === undefined) throw new Error(`no pyramid level for zoom ${String(z)}`);
-        if (x < 0 || y < 0 || x >= level.tilesAcross || y >= level.tilesDown) {
-          throw new Error('tile out of range');
-        }
-        const bitmap = await client.tile({
-          series: level.series,
-          resolution: level.resolution,
-          col: x,
-          row: y,
-          tileWidth: level.tileWidth,
-          tileHeight: level.tileHeight,
-          levelWidth: level.width,
-          levelHeight: level.height,
-          compressed: level.compressed,
-        });
-        if (bitmap === null) throw new Error('tile unavailable');
-        return bitmap;
-      },
-      // Slide tiles are opaque JPEG; skipping alpha avoids a needless blend.
-      transition: 120,
-    });
+    gridRef.current = { tileGrid, projection, levels: reversed };
 
     const view = new View({
       projection,
       extent,
       constrainOnlyCenter: false,
       showFullExtent: true,
-      zoomFactor: ZOOM_FACTOR,
       // Deliberately no `resolutions` here, only on the tile grid: see
       // zoomBounds. The tile grid still picks the nearest stored level and
       // OpenLayers upsamples beyond it.
       ...zoomBounds(resolutions),
     });
 
+    const layer = new TileLayer({ style: { color: ['array', 0, 0, 0, 0] } });
+    layerRef.current = layer;
+
     const olMap = new Map({
       target: container,
-      layers: [new TileLayer({ source })],
+      layers: [layer],
       view,
       // The default controls are replaced with themed React components.
       controls: [],
@@ -126,6 +126,7 @@ export function useSlideMap(
       // page does not scroll, so handling those immediately is correct.
       interactions: defaultInteractions({ onFocusOnly: false }),
     });
+
     const restored = initialCamera;
     if (restored.x !== undefined && restored.y !== undefined && restored.r !== undefined) {
       view.setCenter([restored.x, -restored.y]);
@@ -152,7 +153,14 @@ export function useSlideMap(
       });
     };
     olMap.on('moveend', publishCamera);
+    // Published directly rather than waiting for `moveend`. The layer has no
+    // source until the channel structure resolves, so the map may not render a
+    // frame for some time, and `moveend` only fires from the render loop —
+    // which would leave the URL without a camera until the first interaction.
+    publishCamera();
 
+    // A map is an external resource created in an effect and published to
+    // state; the controls and overview need to re-render once it exists.
     // eslint-disable-next-line react-hooks/set-state-in-effect -- resource handoff
     setMap(olMap);
 
@@ -160,10 +168,87 @@ export function useSlideMap(
       olMap.un('moveend', publishCamera);
       olMap.setTarget(undefined);
       olMap.dispose();
-      source.dispose();
-      setMap((current) => (current === olMap ? null : current));
+      layerRef.current = null;
+      gridRef.current = null;
+      setMap((currentMap) => (currentMap === olMap ? null : currentMap));
     };
   }, [container, model, client, initialCamera]);
+
+  // Source and style follow the channel structure. Swapping them in place keeps
+  // the camera and avoids a full rebuild every time channels resolve.
+  useEffect(() => {
+    const layer = layerRef.current;
+    const grid = gridRef.current;
+    if (layer === null || grid === null || model === null || client === null) return;
+
+    const current = displayRef.current;
+    const fluorescence = current.mode === 'fluorescence';
+    const base = model.series[0];
+    const planes = fluorescence
+      ? current.channels.map((channel) =>
+          planeIndex(
+            base?.dimensionOrder ?? 'XYCZT',
+            { sizeZ: base?.sizeZ ?? 1, sizeC: base?.sizeC ?? 1, sizeT: base?.sizeT ?? 1 },
+            { z: 0, c: channel.index, t: 0 },
+          ),
+        )
+      : [];
+
+    // A fluorescence slide has nothing to draw until its channels resolve;
+    // rendering a placeholder would flash black over the viewport.
+    if (fluorescence && planes.length === 0) return;
+
+    const source = new DataTileSource({
+      tileGrid: grid.tileGrid,
+      projection: grid.projection,
+      bandCount: fluorescence ? planes.length : 4,
+      loader: async (z, x, y) => {
+        const level = grid.levels[z];
+        if (level === undefined) throw new Error(`no pyramid level for zoom ${String(z)}`);
+        if (x < 0 || y < 0 || x >= level.tilesAcross || y >= level.tilesDown) {
+          throw new Error('tile out of range');
+        }
+        const tile = await client.tile({
+          series: level.series,
+          resolution: level.resolution,
+          col: x,
+          row: y,
+          tileWidth: level.tileWidth,
+          tileHeight: level.tileHeight,
+          levelWidth: level.width,
+          levelHeight: level.height,
+          planes,
+          compressed: level.compressed,
+        });
+        if (tile === null) throw new Error('tile unavailable');
+        return tile;
+      },
+      transition: 120,
+    });
+
+    layer.setStyle(
+      fluorescence
+        ? buildFluorescenceStyle(current.channels)
+        : buildBrightfieldStyle(current.brightfield),
+    );
+    layer.setSource(source);
+
+    return (): void => {
+      source.dispose();
+    };
+  }, [model, client, structureKey]);
+
+  // Sliders only move uniforms, so adjusting a window or a colour repaints
+  // without recompiling the shader or refetching any tiles.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (layer === null) return;
+    layer.updateStyleVariables(
+      display.mode === 'fluorescence'
+        ? channelVariables(display.channels)
+        : brightfieldVariables(display.brightfield),
+    );
+  }, [display]);
 
   return { map };
 }

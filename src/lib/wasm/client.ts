@@ -4,7 +4,14 @@
  * One client owns one worker owns one slide, so closing a slide is just
  * terminating the worker — there is no shared state to unwind.
  */
-import type { DetectResult, OpenResult, WorkerRequest, WorkerResponse } from './protocol';
+import type {
+  DetectResult,
+  OpenResult,
+  TilePayload,
+  WorkerRequest,
+  WorkerResponse,
+} from './protocol';
+import type { DisplayRange } from '../pixels';
 
 /** Public asset path, so it respects Vite's configured base. */
 function wasmUrl(): string {
@@ -101,8 +108,9 @@ export class SlideClient {
     tileHeight: number;
     levelWidth: number;
     levelHeight: number;
+    planes: readonly number[];
     compressed: boolean;
-  }): Promise<ImageBitmap | null> {
+  }): Promise<TilePayload | null> {
     const response = await this.send({ id: this.nextRequestId(), kind: 'tile', ...request });
     if (!response.ok) throw new Error(response.error);
     if (response.kind !== 'tile') throw new Error('unexpected response to tile');
@@ -140,6 +148,24 @@ export class SlideClient {
     });
     if (!response.ok) throw new Error(response.error);
     if (response.kind !== 'thumbnail') throw new Error('unexpected response to thumbnail');
+    return response.value;
+  }
+
+  /** Starting display windows for the given planes. */
+  async channelRanges(
+    series: number,
+    resolution: number,
+    planes: readonly number[],
+  ): Promise<readonly DisplayRange[]> {
+    const response = await this.send({
+      id: this.nextRequestId(),
+      kind: 'channelRanges',
+      series,
+      resolution,
+      planes,
+    });
+    if (!response.ok) throw new Error(response.error);
+    if (response.kind !== 'channelRanges') throw new Error('unexpected response to channelRanges');
     return response.value;
   }
 

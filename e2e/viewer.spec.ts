@@ -1,7 +1,46 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/synthetic.ome.tif', import.meta.url));
+const MULTICHANNEL = fileURLToPath(new URL('./fixtures/multichannel.ome.tif', import.meta.url));
+
+/**
+ * Counts pixels dominated by each primary in the rendered canvas.
+ *
+ * The multichannel fixture puts each channel in its own horizontal band, and
+ * the fallback palette gives them green, magenta and blue, so the composite is
+ * checked by looking for all three rather than by sampling exact positions.
+ */
+async function dominantCounts(page: Page): Promise<{
+  green: number;
+  magenta: number;
+  blue: number;
+}> {
+  return page.evaluate(() => {
+    const canvas = document.querySelector('canvas');
+    const empty = { green: 0, magenta: 0, blue: 0 };
+    if (canvas === null) return empty;
+    const probe = document.createElement('canvas');
+    probe.width = canvas.width;
+    probe.height = canvas.height;
+    const context = probe.getContext('2d');
+    if (context === null) return empty;
+    context.drawImage(canvas, 0, 0);
+    const { data } = context.getImageData(0, 0, probe.width, probe.height);
+
+    const counts = { green: 0, magenta: 0, blue: 0 };
+    const FLOOR = 60;
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] ?? 0;
+      const g = data[i + 1] ?? 0;
+      const b = data[i + 2] ?? 0;
+      if (g > FLOOR && g > r * 1.6 && g > b * 1.6) counts.green += 1;
+      else if (r > FLOOR && b > FLOOR && r > g * 1.6 && b > g * 1.6) counts.magenta += 1;
+      else if (b > FLOOR && b > r * 1.6 && b > g * 1.2) counts.blue += 1;
+    }
+    return counts;
+  });
+}
 
 test('opens a pyramidal slide and renders tiles', async ({ page }) => {
   await page.goto('./');
@@ -209,4 +248,44 @@ test('zooms with the wheel without needing a click first', async ({ page }) => {
   await page.mouse.wheel(0, -400);
 
   await expect.poll(() => Number(readResolution()), { timeout: 15_000 }).toBeLessThan(before);
+});
+
+test('composites a multichannel slide and lets channels be turned off', async ({ page }) => {
+  await page.goto('./');
+  await page.getByLabel('Choose a whole-slide image').setInputFiles(MULTICHANNEL);
+
+  const channels = page.getByRole('region', { name: 'Channels' });
+  await expect(channels).toBeVisible({ timeout: 60_000 });
+
+  // Three separate planes, so three independently controllable channels.
+  await expect(channels.getByRole('button', { name: /^Hide Channel/ })).toHaveCount(3);
+
+  // Each channel takes a different colour, so all three primaries appear.
+  await expect
+    .poll(async () => (await dominantCounts(page)).green, { timeout: 30_000 })
+    .toBeGreaterThan(200);
+  const composite = await dominantCounts(page);
+  expect(composite.magenta).toBeGreaterThan(200);
+  expect(composite.blue).toBeGreaterThan(200);
+
+  // Hiding one channel removes its contribution without touching the others.
+  await channels.getByRole('button', { name: 'Hide Channel 1' }).click();
+  await expect
+    .poll(async () => (await dominantCounts(page)).green, { timeout: 15_000 })
+    .toBeLessThan(composite.green / 4);
+
+  const remaining = await dominantCounts(page);
+  expect(remaining.magenta).toBeGreaterThan(200);
+});
+
+test('offers a single adjustment for brightfield slides', async ({ page }) => {
+  await page.goto('./');
+  await page.getByLabel('Choose a whole-slide image').setInputFiles(FIXTURE);
+
+  const channels = page.getByRole('region', { name: 'Channels' });
+  await expect(channels).toBeVisible({ timeout: 60_000 });
+
+  // A brightfield image has no separate planes to colour, so it gets one window.
+  await expect(channels).toContainText('brightfield');
+  await expect(channels.getByRole('button', { name: /^Hide Channel/ })).toHaveCount(0);
 });

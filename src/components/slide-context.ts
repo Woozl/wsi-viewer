@@ -2,11 +2,13 @@ import { createContext, useContext } from 'react';
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { OpenedSlide } from '@/hooks/use-slide';
 import type { SlideClient } from '@/lib/wasm/client';
+import type { DisplaySettings } from '@/lib/channels';
 
 export interface SlideSession {
   readonly client: SlideClient | null;
   readonly query: UseQueryResult<OpenedSlide>;
   readonly file: File | null;
+  readonly display: DisplaySettings;
 }
 
 /**

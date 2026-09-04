@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { SeriesInfo } from '@/lib/slide';
@@ -76,7 +76,8 @@ function AssociatedImage({
  *
  * Painting happens in the ref callback rather than an effect, which keeps the
  * element out of component state and runs as soon as the node exists. The bitmap
- * is closed on unmount to release its backing memory promptly.
+ * is deliberately never closed: StrictMode remounts would then draw a detached
+ * image, and these previews are small enough to leave to the collector.
  */
 function BitmapCanvas({
   bitmap,
@@ -91,13 +92,6 @@ function BitmapCanvas({
       node.width = bitmap.width;
       node.height = bitmap.height;
       node.getContext('2d')?.drawImage(bitmap, 0, 0);
-    },
-    [bitmap],
-  );
-
-  useEffect(
-    () => (): void => {
-      bitmap.close();
     },
     [bitmap],
   );

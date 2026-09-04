@@ -11,10 +11,12 @@ import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { SlideClient } from '@/lib/wasm/client';
 import { buildSlideModel, type SlideModel } from '@/lib/slide';
 import type { DetectResult } from '@/lib/wasm/protocol';
+import type { ChannelMetadata } from '@/lib/channels';
 
 export interface OpenedSlide {
   readonly model: SlideModel;
   readonly detection: DetectResult;
+  readonly channels: readonly ChannelMetadata[];
 }
 
 export function slideKey(file: File): readonly unknown[] {
@@ -60,8 +62,8 @@ export function useSlide(
     retry: false,
     queryFn: async (): Promise<OpenedSlide> => {
       if (file === null || client === null) throw new Error('no slide selected');
-      const { series, candidates, detection } = await client.open(file, companions);
-      return { model: buildSlideModel(series, candidates), detection };
+      const { series, candidates, detection, channels } = await client.open(file, companions);
+      return { model: buildSlideModel(series, candidates), detection, channels };
     },
   });
 

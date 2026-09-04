@@ -269,6 +269,55 @@ pub extern "C" fn bf_metadata_json(handle: u32) -> u64 {
     })
 }
 
+/// One channel's acquisition metadata, used to pick a sensible display colour.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChannelInfo {
+    index: usize,
+    name: Option<String>,
+    fluor: Option<String>,
+    /// Packed RGBA as stored in OME-XML; sign-extended, so read as bytes.
+    color: Option<i32>,
+    emission_wavelength: Option<f64>,
+    excitation_wavelength: Option<f64>,
+    contrast_method: Option<String>,
+}
+
+/// Returns the current series' channels as JSON.
+///
+/// Channel metadata lives in the OME model rather than in `ImageMetadata`,
+/// which only carries the channel count. Formats that record nothing return an
+/// empty list and the host falls back to its own defaults.
+#[no_mangle]
+pub extern "C" fn bf_channels_json(handle: u32) -> u64 {
+    guard(0, || {
+        with_slide(handle, |slide| {
+            let series = slide.reader.series();
+            let channels = slide
+                .reader
+                .ome_metadata()
+                .and_then(|ome| ome.images.get(series).cloned())
+                .map(|image| image.channels)
+                .unwrap_or_default();
+
+            let described: Vec<ChannelInfo> = channels
+                .iter()
+                .enumerate()
+                .map(|(index, channel)| ChannelInfo {
+                    index,
+                    name: channel.name.clone(),
+                    fluor: channel.fluor.clone(),
+                    color: channel.color,
+                    emission_wavelength: channel.emission_wavelength,
+                    excitation_wavelength: channel.excitation_wavelength,
+                    contrast_method: channel.contrast_method.clone(),
+                })
+                .collect();
+            pack_json(&described)
+        })
+    })
+}
+
 /// Returns every series' metadata in one call, which is what the viewer needs to
 /// reconstruct the pyramid. Restores the originally selected series.
 #[no_mangle]

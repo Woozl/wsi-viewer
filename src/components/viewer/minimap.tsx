@@ -66,11 +66,14 @@ export function Minimap({ map, model, client, slideKey }: MinimapProps): React.J
   // The bitmap is mirrored into a ref so the postrender handler can read it
   // without being re-created on every repaint. Writing a ref during render is
   // not allowed, so it happens here.
+  //
+  // Deliberately not closed on cleanup: StrictMode unmounts and remounts, and a
+  // closed bitmap is detached, so the remount would draw nothing and throw. The
+  // query holds no cache for it, so it is collected normally.
   useEffect(() => {
     bitmapRef.current = bitmap;
     return (): void => {
       bitmapRef.current = null;
-      bitmap?.close();
     };
   }, [bitmap]);
 

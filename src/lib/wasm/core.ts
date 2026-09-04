@@ -36,6 +36,7 @@ interface CoreExports {
   bf_close(handle: number): number;
   bf_metadata_json(handle: number): bigint;
   bf_all_series_json(handle: number): bigint;
+  bf_channels_json(handle: number): bigint;
   bf_levels_json(handle: number): bigint;
   bf_series_count(handle: number): number;
   bf_set_series(handle: number, series: number): number;
@@ -66,6 +67,7 @@ const REQUIRED_FUNCTIONS = [
   'bf_close',
   'bf_metadata_json',
   'bf_all_series_json',
+  'bf_channels_json',
   'bf_levels_json',
   'bf_series_count',
   'bf_set_series',
@@ -261,6 +263,12 @@ export class SlideCore {
   allSeriesJson(handle: number): string {
     const text = this.takeText(this.exports.bf_all_series_json(handle));
     if (text === null) throw new Error(`could not read series list: ${this.lastError()}`);
+    return text;
+  }
+
+  channelsJson(handle: number): string {
+    const text = this.takeText(this.exports.bf_channels_json(handle));
+    if (text === null) throw new Error(`could not read channels: ${this.lastError()}`);
     return text;
   }
 

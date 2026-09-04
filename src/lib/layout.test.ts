@@ -17,6 +17,7 @@ describe('default layout', () => {
     expect(panelsIn(DEFAULT_LAYOUT, 'left')).toEqual(['folders']);
     expect(panelsIn(DEFAULT_LAYOUT, 'right')).toEqual([
       'slide',
+      'channels',
       'pyramid',
       'associated',
       'metadata',
@@ -34,12 +35,25 @@ describe('movePanel', () => {
 
   it('inserts before a given panel so a drop lands where the pointer was', () => {
     const next = movePanel(DEFAULT_LAYOUT, 'folders', 'right', 'pyramid');
-    expect(panelsIn(next, 'right')).toEqual(['slide', 'folders', 'pyramid', 'associated', 'metadata']);
+    expect(panelsIn(next, 'right')).toEqual([
+      'slide',
+      'channels',
+      'folders',
+      'pyramid',
+      'associated',
+      'metadata',
+    ]);
   });
 
   it('reorders within the same dock without duplicating', () => {
     const next = movePanel(DEFAULT_LAYOUT, 'metadata', 'right', 'slide');
-    expect(panelsIn(next, 'right')).toEqual(['metadata', 'slide', 'pyramid', 'associated']);
+    expect(panelsIn(next, 'right')).toEqual([
+      'metadata',
+      'slide',
+      'channels',
+      'pyramid',
+      'associated',
+    ]);
   });
 });
 

@@ -9,7 +9,7 @@
 use std::path::Path;
 
 use bioformats::tiff::PyramidOmeTiffWriter;
-use bioformats::{FormatWriter, ImageMetadata, PixelType};
+use bioformats::{FormatWriter, ImageMetadata, ImageWriter, PixelType};
 
 const WIDTH: u32 = 1024;
 const HEIGHT: u32 = 768;
@@ -60,5 +60,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writer.write_pyramid()?;
 
     println!("wrote {target} ({WIDTH}x{HEIGHT}, 3 levels)");
+
+    write_multichannel(&path.with_file_name("multichannel.ome.tif"))?;
+    Ok(())
+}
+
+/// Three 16-bit channels in separate planes, as a fluorescence file stores them.
+///
+/// Each channel occupies a different part of the frame and a different part of
+/// the value range, so a test can tell them apart after compositing and can see
+/// that the display window is doing something.
+fn write_multichannel(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    const SIZE: u32 = 256;
+    let pixels = (SIZE as usize) * (SIZE as usize);
+
+    let planes: Vec<Vec<u8>> = (0..3u32)
+        .map(|channel| {
+            let mut plane = vec![0u8; pixels * 2];
+            for y in 0..SIZE {
+                for x in 0..SIZE {
+                    // A band per channel: the first fills the top third, and so on.
+                    let band = (y * 3) / SIZE;
+                    let value: u16 = if band == channel { 3000 + (x as u16) * 4 } else { 40 };
+                    let offset = ((y as usize) * (SIZE as usize) + (x as usize)) * 2;
+                    plane[offset] = (value & 0xff) as u8;
+                    plane[offset + 1] = (value >> 8) as u8;
+                }
+            }
+            plane
+        })
+        .collect();
+
+    let mut meta = ImageMetadata::default();
+    meta.size_x = SIZE;
+    meta.size_y = SIZE;
+    meta.size_c = 3;
+    // Separate planes rather than interleaved samples: this is what makes it a
+    // multichannel image rather than an RGB one.
+    meta.is_rgb = false;
+    meta.pixel_type = PixelType::Uint16;
+    meta.bits_per_pixel = 16;
+    meta.image_count = 3;
+
+    ImageWriter::save(path, &meta, &planes)?;
+    println!("wrote {} ({SIZE}x{SIZE}, 3 channels)", path.display());
     Ok(())
 }

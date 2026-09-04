@@ -102,6 +102,30 @@ export function computeDisplayRange(
   return high > low ? { min: low, max: high } : { min: low, max: low + 1 };
 }
 
+/**
+ * Reads one plane's samples as raw floats.
+ *
+ * Used for the multichannel path, where each channel is uploaded as its own
+ * band and the display window is applied on the GPU. Values are left in the
+ * file's own units so the window can be expressed in them too.
+ */
+export function readPlaneFloats(
+  pixels: Uint8Array,
+  info: SeriesInfo,
+  pixelCount: number,
+): Float32Array<ArrayBuffer> {
+  const values = new Float32Array(pixelCount);
+  for (let index = 0; index < pixelCount; index += 1) {
+    values[index] = sampleAt(pixels, info, pixelCount, 0, index);
+  }
+  return values;
+}
+
+/** Largest value a sample of this depth can hold. */
+export function sampleCeiling(info: SeriesInfo): number {
+  return bytesPerSample(info) === 1 ? 255 : 65535;
+}
+
 /** Expands raw samples into RGBA, stretching `range` across the output. */
 export function toRgba(
   pixels: Uint8Array,

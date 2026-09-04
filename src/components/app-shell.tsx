@@ -7,7 +7,10 @@ import { PyramidPanel } from './panels/pyramid-panel';
 import { FormatMetadataPanel } from './panels/format-metadata-panel';
 import { EmptyState } from './panels/empty-state';
 import { AssociatedImages } from './sidebar/associated-images';
+import { ChannelsPanel } from './panels/channels-panel';
 import { useSlide } from '@/hooks/use-slide';
+import { useDisplay } from '@/hooks/use-display';
+import { sampleCeiling } from '@/lib/pixels';
 import { useSlideStore } from '@/store/slide-store';
 import type { PanelId } from '@/lib/layout';
 
@@ -25,12 +28,24 @@ export function AppShell({ children }: { readonly children: React.ReactNode }): 
 
   const model = query.data?.model ?? null;
   const slideKey = file === null ? 'none' : `${file.name}:${String(file.size)}`;
+  const display = useDisplay(model, client, query.data?.channels ?? [], slideKey);
+  const base = model?.series[0] ?? null;
 
-  const session = useMemo(() => ({ client, query, file }), [client, query, file]);
+  const session = useMemo(
+    () => ({ client, query, file, display }),
+    [client, query, file, display],
+  );
 
   const content: Record<PanelId, React.ReactNode> = {
     folders: <FoldersPanel />,
     slide: <SlidePanel model={model} fileName={file?.name ?? null} />,
+    channels: (
+      <ChannelsPanel
+        display={display}
+        ceiling={base === null ? 255 : sampleCeiling(base)}
+        hasSlide={model !== null}
+      />
+    ),
     pyramid: <PyramidPanel model={model} />,
     associated:
       model === null || client === null ? (

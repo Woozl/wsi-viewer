@@ -10,12 +10,20 @@
 export const DOCK_SIDES = ['left', 'right', 'top', 'bottom'] as const;
 export type DockSide = (typeof DOCK_SIDES)[number];
 
-export const PANEL_IDS = ['folders', 'slide', 'pyramid', 'associated', 'metadata'] as const;
+export const PANEL_IDS = [
+  'folders',
+  'slide',
+  'channels',
+  'pyramid',
+  'associated',
+  'metadata',
+] as const;
 export type PanelId = (typeof PANEL_IDS)[number];
 
 export const PANEL_TITLES: Readonly<Record<PanelId, string>> = {
   folders: 'Folders',
   slide: 'Slide',
+  channels: 'Channels',
   pyramid: 'Pyramid',
   associated: 'Associated images',
   metadata: 'Format metadata',
@@ -30,6 +38,7 @@ export const PANEL_TITLES: Readonly<Record<PanelId, string>> = {
 export const PANEL_GROWS: Readonly<Record<PanelId, boolean>> = {
   folders: true,
   slide: false,
+  channels: true,
   pyramid: false,
   associated: true,
   metadata: true,
@@ -54,12 +63,20 @@ export const DEFAULT_LAYOUT: LayoutState = {
   placement: {
     folders: 'left',
     slide: 'right',
+    channels: 'right',
     pyramid: 'right',
     associated: 'right',
     metadata: 'right',
   },
-  order: ['folders', 'slide', 'pyramid', 'associated', 'metadata'],
-  collapsed: { folders: false, slide: false, pyramid: false, associated: false, metadata: false },
+  order: ['folders', 'slide', 'channels', 'pyramid', 'associated', 'metadata'],
+  collapsed: {
+    folders: false,
+    slide: false,
+    channels: false,
+    pyramid: false,
+    associated: false,
+    metadata: false,
+  },
   sizes: { left: 260, right: 320, top: 220, bottom: 220 },
 };
 

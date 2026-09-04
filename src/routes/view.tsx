@@ -18,7 +18,7 @@ const CAMERA_WRITE_DELAY_MS = 250;
 function ViewPage(): React.JSX.Element {
   const navigate = useNavigate();
   const search = Route.useSearch();
-  const { client, query, file } = useSlideSession();
+  const { client, query, file, display } = useSlideSession();
 
   // Only the first search value is restored into the map; later ones are written
   // by the map itself, so re-reading them would fight the user.
@@ -79,6 +79,7 @@ function ViewPage(): React.JSX.Element {
         camera={initialCamera}
         onCameraChange={onCameraChange}
         slideKey={`${file.name}:${String(file.size)}`}
+        display={display}
       />
     </div>
   );
