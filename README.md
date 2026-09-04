@@ -99,8 +99,10 @@ readers such as `NdpiReader` that also inspect file contents inside
 - The URL records the camera but cannot record the slide, because a `File`
   handle is not revivable. A shared link restores the view once the same slide
   is reopened.
-- High-bit-depth images are displayed by taking the high byte of each sample.
-  That is adequate for viewing but is not real windowing.
+- High-bit-depth images are auto-levelled: a display range is sampled once per
+  series from its coarsest level, with the extreme 0.2% trimmed from each end,
+  and every tile is stretched using it. That is a global auto-contrast, not
+  per-channel windowing, and the range cannot yet be adjusted by hand.
 
 ## Licence
 

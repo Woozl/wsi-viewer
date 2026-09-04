@@ -16,6 +16,7 @@ import {
   type SeriesInfo,
 } from '../slide';
 import { bool, isRecord, parseRecord } from '../json';
+import { computeDisplayRange, FULL_8_BIT, toRgba, type DisplayRange } from '../pixels';
 import type { DetectResult, WorkerRequest, WorkerResponse } from './protocol';
 
 
@@ -28,6 +29,9 @@ const handles = new Map<string, number>();
 let compiled: Promise<WebAssembly.Module> | null = null;
 /** Cached from `open`; needed to interpret raw pixels on the fallback path. */
 let seriesInfo: readonly SeriesInfo[] = [];
+let levelCandidates: readonly LevelCandidate[] = [];
+/** Display range per series, computed once from a sample of the coarsest level. */
+const displayRanges = new Map<number, DisplayRange>();
 
 function compile(url: string): Promise<WebAssembly.Module> {
   compiled ??= WebAssembly.compileStreaming(fetch(url));
@@ -104,6 +108,9 @@ function tagJpegColorSpace(jpeg: Uint8Array, colorSpace: string): Uint8Array<Arr
 /** Header size sampled for magic-byte detection. */
 const HEADER_BYTES = 64 * 1024;
 
+/** Longest edge read when sampling a series to choose its display range. */
+const SAMPLE_EXTENT = 512;
+
 async function detect(active: SlideCore, file: File): Promise<DetectResult> {
   const header = new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer());
   const record = parseRecord(active.detectJson(file.name, header), 'detect');
@@ -147,48 +154,42 @@ async function readTile(
 }
 
 /**
- * Expands raw pixels into RGBA.
+ * Display range for a series, computed once and reused.
  *
- * Readers hand back the file's own layout, so the data may be planar or
- * interleaved and may carry one or three channels. Values wider than 8 bits are
- * reduced by taking the high byte, which is enough for display but is not a
- * substitute for real windowing on high-bit-depth microscopy data.
+ * Every tile of a level must share one range: deriving it per tile would make
+ * each tile stretch differently and put visible seams across the image.
  */
-function toRgba(
-  pixels: Uint8Array,
-  info: SeriesInfo,
-  width: number,
-  height: number,
-): Uint8ClampedArray<ArrayBuffer> {
-  const pixelCount = width * height;
-  const rgba = new Uint8ClampedArray(pixelCount * 4);
-  const bytesPerSample = Math.max(1, Math.ceil(info.bitsPerPixel / 8));
-  const channels = info.isRgb ? Math.min(3, info.sizeC) : 1;
-  // Little-endian samples put the most significant byte last.
-  const sampleOffset = info.isLittleEndian ? bytesPerSample - 1 : 0;
+function displayRangeFor(active: SlideCore, series: number, info: SeriesInfo): DisplayRange {
+  const cached = displayRanges.get(series);
+  if (cached !== undefined) return cached;
 
-  const sampleAt = (channel: number, index: number): number => {
-    const position = info.isInterleaved
-      ? (index * channels + channel) * bytesPerSample
-      : (channel * pixelCount + index) * bytesPerSample;
-    return pixels[position + sampleOffset] ?? 0;
-  };
-
-  for (let index = 0; index < pixelCount; index += 1) {
-    const out = index * 4;
-    if (channels === 1) {
-      const value = sampleAt(0, index);
-      rgba[out] = value;
-      rgba[out + 1] = value;
-      rgba[out + 2] = value;
-    } else {
-      rgba[out] = sampleAt(0, index);
-      rgba[out + 1] = sampleAt(1, index);
-      rgba[out + 2] = sampleAt(2, index);
-    }
-    rgba[out + 3] = 255;
+  if (info.bitsPerPixel <= 8) {
+    displayRanges.set(series, FULL_8_BIT);
+    return FULL_8_BIT;
   }
-  return rgba;
+
+  // Sample the coarsest level of this series, which is the cheapest read that
+  // still covers the whole field of view.
+  const levels = levelCandidates.filter((entry) => entry.series === series);
+  const coarsest = levels.reduce<LevelCandidate | null>(
+    (best, entry) => (best === null || entry.width * entry.height < best.width * best.height ? entry : best),
+    null,
+  );
+
+  let range = FULL_8_BIT;
+  try {
+    const width = Math.min(SAMPLE_EXTENT, coarsest?.width ?? info.width);
+    const height = Math.min(SAMPLE_EXTENT, coarsest?.height ?? info.height);
+    const handle = handleFor(active, series, coarsest?.resolution ?? 0);
+    const pixels = active.readRegion(handle, 0, 0, 0, width, height);
+    range = computeDisplayRange(pixels, info, width * height);
+  } catch {
+    // A reader that cannot serve the sample still gets a usable, if flat, range.
+    range = { min: 0, max: 65535 };
+  }
+
+  displayRanges.set(series, range);
+  return range;
 }
 
 /** Serves a tile by decoding a region, for levels with no compressed blocks. */
@@ -219,7 +220,8 @@ async function readRegionTile(
   const handle = handleFor(active, request.series, request.resolution);
   const pixels = active.readRegion(handle, 0, x, y, width, height);
 
-  const image = new ImageData(toRgba(pixels, info, width, height), width, height);
+  const range = displayRangeFor(active, request.series, info);
+  const image = new ImageData(toRgba(pixels, info, width, height, range), width, height);
   if (width === request.tileWidth && height === request.tileHeight) {
     return await createImageBitmap(image);
   }
@@ -246,7 +248,12 @@ async function readThumbnail(
 
   const handle = handleFor(active, series, 0);
   const pixels = active.readRegion(handle, 0, 0, 0, info.width, info.height);
-  const image = new ImageData(toRgba(pixels, info, info.width, info.height), info.width, info.height);
+  const range = displayRangeFor(active, series, info);
+  const image = new ImageData(
+    toRgba(pixels, info, info.width, info.height, range),
+    info.width,
+    info.height,
+  );
 
   const scale = Math.min(1, maxSize / Math.max(info.width, info.height));
   if (scale === 1) return await createImageBitmap(image);
@@ -280,6 +287,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
           const probe = active.open();
           const series = parseAllSeries(active.allSeriesJson(probe));
           seriesInfo = series;
+          displayRanges.clear();
           // A pyramid may be spread across series (Aperio) or across resolutions
           // within one series (pyramidal OME-TIFF), so both axes are enumerated.
           const candidates: LevelCandidate[] = [];
@@ -295,6 +303,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
               });
             }
           }
+          levelCandidates = candidates;
           active.close(probe);
           reply({
             id: request.id,
