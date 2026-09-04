@@ -11,14 +11,15 @@ test('opens a pyramidal slide and renders tiles', async ({ page }) => {
   await page.getByLabel('Choose a whole-slide image').setInputFiles(FIXTURE);
 
   // Opening compiles the WASM core and reads the file, so allow real time.
-  const sidebar = page.getByRole('complementary', { name: 'Slide details' });
-  await expect(sidebar).toBeVisible({ timeout: 60_000 });
-  await expect(sidebar).toContainText('synthetic.ome.tif');
-  await expect(sidebar).toContainText('1,024 x 768');
+  const slide = page.getByRole('region', { name: 'Slide' });
+  await expect(slide).toBeVisible({ timeout: 60_000 });
+  await expect(slide).toContainText('synthetic.ome.tif');
+  await expect(slide).toContainText('1,024 x 768');
 
   // The fixture is written with three resolution levels.
-  await expect(sidebar).toContainText('512 x 384');
-  await expect(sidebar).toContainText('256 x 192');
+  const pyramid = page.getByRole('region', { name: 'Pyramid' });
+  await expect(pyramid).toContainText('512 x 384');
+  await expect(pyramid).toContainText('256 x 192');
 
   const viewer = page.getByRole('application', { name: /Slide viewer/ });
   await expect(viewer).toBeVisible();
@@ -111,4 +112,43 @@ test('offers light, dark and system themes', async ({ page }) => {
 
   await page.getByRole('menuitemradio', { name: 'Dark' }).click();
   await expect(page.locator('html')).toHaveClass(/dark/);
+});
+
+test('docks panels to any edge and remembers the arrangement', async ({ page }) => {
+  await page.goto('./');
+
+  const folders = page.getByRole('region', { name: 'Folders' });
+  await expect(folders).toBeVisible();
+  await expect(folders.getByRole('button', { name: 'Add folder' })).toBeVisible();
+
+  // Panels move through the header menu, which is also the keyboard path.
+  await page.getByRole('button', { name: 'Move Folders panel' }).click();
+  await page.getByRole('menuitemradio', { name: 'Bottom' }).click();
+
+  // The dock a panel lives in is reflected by which resize handle exists.
+  await expect(page.getByRole('separator', { name: 'Resize the bottom panel' })).toBeVisible();
+  await expect(page.getByRole('separator', { name: 'Resize the left panel' })).toBeHidden();
+
+  // The arrangement is a local preference, so it survives a reload.
+  await page.reload();
+  await expect(page.getByRole('separator', { name: 'Resize the bottom panel' })).toBeVisible();
+
+  // Resizing works from the keyboard as well as by dragging.
+  const handle = page.getByRole('separator', { name: 'Resize the bottom panel' });
+  const before = Number(await handle.getAttribute('aria-valuenow'));
+  await handle.focus();
+  await page.keyboard.press('ArrowUp');
+  await expect
+    .poll(async () => Number(await handle.getAttribute('aria-valuenow')))
+    .not.toBe(before);
+});
+
+test('collapses a panel to its header', async ({ page }) => {
+  await page.goto('./');
+
+  const folders = page.getByRole('region', { name: 'Folders' });
+  await expect(folders.getByRole('button', { name: 'Add folder' })).toBeVisible();
+  await page.getByRole('button', { name: 'Collapse Folders' }).click();
+  await expect(folders.getByRole('button', { name: 'Add folder' })).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Expand Folders' })).toBeVisible();
 });

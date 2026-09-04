@@ -11,6 +11,7 @@ to WebAssembly; no server sees the data, and the build output is static files.
 - Pans and zooms a gigapixel pyramid at interactive speed
 - Shows the slide's full format metadata, pyramid layout and associated images
 - Overview map showing where the viewport sits, with click-to-navigate
+- Dockable panels: drag any section to any edge, collapse it, or resize the dock
 - Reads whole folders through the File System Access API, remembering them
   between visits
 - Light, dark and system themes; keyboard-navigable throughout
@@ -69,6 +70,15 @@ components with no marker must assume YCbCr — the slide renders magenta and
 green. An APP14 segment declaring `transform = 0` is injected to correct it.
 Levels with no compressed blocks fall back to decoding regions.
 
+**Panels dock to any edge.** The arrangement is described by which dock each
+panel sits in plus one global ordering, so moving a panel between docks never
+has to reconcile two arrays. Top and bottom span the full width and the side
+docks fill the band between them, which keeps the viewport rectangular whatever
+the arrangement. Dragging a header is the pointer affordance; a "Move to" menu
+on each header is the keyboard equivalent. The layout persists to localStorage
+and is repaired on load, so a renamed or newly added panel cannot strand anyone
+with an arrangement that never shows it.
+
 **The format list is derived, not written by hand.** `scripts/build-wasm.mjs`
 probes every registered reader with candidate extensions harvested from the crate
 source and records the ones a reader claims. A documented supplement covers
@@ -80,6 +90,9 @@ readers such as `NdpiReader` that also inspect file contents inside
 - No MIRAX, Ventana, Trestle, Sakura or Philips support: those come from the
   `openslide` feature, which cannot reach WebAssembly without porting its C
   shims to Rust.
+- Formats whose data lives in a sibling folder (OIF, AFI, NDPIS) can only be
+  opened through the Folders panel, since the file input hands over a single
+  file with no way to reach its siblings.
 - No Zarr/OME-Zarr or TissueFAXS, for the same reason.
 - The folder tree needs the File System Access API, so it is Chromium-only.
   Everything else works everywhere; the file input is the fallback.

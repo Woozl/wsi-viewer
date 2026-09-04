@@ -121,20 +121,42 @@ export async function storeDirectories(handles: readonly FileSystemDirectoryHand
 export async function collectCompanions(
   parent: FileSystemDirectoryHandle,
   slideName: string,
+  /**
+   * Folder holding the pixel data. Defaults to whichever sibling folder matches
+   * one of the naming conventions; pass one explicitly when the user has picked
+   * it themselves because the name does not match.
+   */
+  companionDirectory?: FileSystemDirectoryHandle,
 ): Promise<Map<string, File>> {
   const companions = new Map<string, File>();
+  const chosen = companionDirectory ?? (await findCompanionDirectory(parent, slideName));
 
   for await (const [name, entry] of parent.entries()) {
-    if (entry.kind === 'file') {
-      if (name !== slideName) companions.set(name, await entry.getFile());
-      continue;
-    }
-    if (!isCompanionDirectoryName(name, slideName)) continue;
-    for await (const [childName, child] of entry.entries()) {
-      if (child.kind === 'file') companions.set(`${name}/${childName}`, await child.getFile());
+    if (entry.kind !== 'file' || name === slideName) continue;
+    companions.set(name, await entry.getFile());
+  }
+
+  if (chosen !== null) {
+    // Mounted under its real name: readers resolve these paths from the index
+    // file's own text, so renaming would break the lookup.
+    for await (const [childName, child] of chosen.entries()) {
+      if (child.kind === 'file') {
+        companions.set(`${chosen.name}/${childName}`, await child.getFile());
+      }
     }
   }
   return companions;
+}
+
+/** The sibling folder holding a slide's pixel data, if one matches by name. */
+export async function findCompanionDirectory(
+  parent: FileSystemDirectoryHandle,
+  slideName: string,
+): Promise<FileSystemDirectoryHandle | null> {
+  for await (const [name, entry] of parent.entries()) {
+    if (entry.kind === 'directory' && isCompanionDirectoryName(name, slideName)) return entry;
+  }
+  return null;
 }
 
 /**

@@ -27,11 +27,7 @@ export function AssociatedImages({
   if (series.length === 0) return null;
 
   return (
-    <section className="space-y-2">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Associated images
-      </h2>
-      <ul className="space-y-2">
+    <ul className="space-y-2">
         {series.map((info) => (
           <li key={info.series} className="space-y-1">
             <AssociatedImage info={info} client={client} slideKey={slideKey} />
@@ -41,8 +37,7 @@ export function AssociatedImages({
             </p>
           </li>
         ))}
-      </ul>
-    </section>
+    </ul>
   );
 }
 

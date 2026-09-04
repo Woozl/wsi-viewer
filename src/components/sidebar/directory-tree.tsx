@@ -9,14 +9,12 @@ import {
 } from 'react-aria-components';
 import { ChevronRightIcon, FileIcon, FolderIcon, Loader2Icon } from 'lucide-react';
 import {
-  collectCompanions,
   isDirectoryHandle,
   isFileHandle,
   listDirectory,
   requestPermission,
   type DirectoryEntry,
 } from '@/lib/fs-access';
-import { needsCompanions } from '@/lib/formats';
 import { cn } from '@/lib/utils';
 
 /** A node as the tree renders it, with children resolved so far. */
@@ -53,10 +51,23 @@ function placeholder(parentId: string): TreeNode {
 
 interface DirectoryTreeProps {
   readonly roots: readonly FileSystemDirectoryHandle[];
-  readonly onOpenFile: (file: File, companions: ReadonlyMap<string, File>) => void;
+  /** `parent` is the folder the file sits in, needed to find its siblings. */
+  readonly onOpenFile: (file: File, parent: FileSystemDirectoryHandle | null) => void;
+  /**
+   * When set, clicking a folder chooses it instead of opening files. Used to
+   * let the user point at the data folder for a slide whose companion could not
+   * be found by name.
+   */
+  readonly choosingFolderFor?: string | null;
+  readonly onChooseFolder?: (handle: FileSystemDirectoryHandle) => void;
 }
 
-export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.JSX.Element {
+export function DirectoryTree({
+  roots,
+  onOpenFile,
+  choosingFolderFor = null,
+  onChooseFolder,
+}: DirectoryTreeProps): React.JSX.Element {
   const [entries, setEntries] = useState<ReadonlyMap<string, readonly DirectoryEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<ReadonlySet<Key>>(new Set());
   const [failed, setFailed] = useState<string | null>(null);
@@ -114,7 +125,16 @@ export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.
     (key: Key): void => {
       const node = findHandle(rootNodes, String(key));
       const handle = node?.handle ?? null;
-      if (node === null || handle === null || !isFileHandle(handle)) return;
+      if (node === null || handle === null) return;
+
+      // While choosing a data folder, only folders are actionable.
+      if (choosingFolderFor !== null) {
+        if (!isDirectoryHandle(handle)) return;
+        onChooseFolder?.(handle);
+        return;
+      }
+
+      if (!isFileHandle(handle)) return;
       const parent = node.parent;
       void (async (): Promise<void> => {
         try {
@@ -122,20 +142,13 @@ export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.
             setFailed('Permission to read that file was declined.');
             return;
           }
-          const file = await handle.getFile();
-          // Resolving every sibling to a File is slow, so it is only done for
-          // the index formats that cannot be read without them.
-          const companions =
-            parent !== null && needsCompanions(file.name)
-              ? await collectCompanions(parent, file.name)
-              : new Map<string, File>();
-          onOpenFile(file, companions);
+          onOpenFile(await handle.getFile(), parent);
         } catch (error) {
           setFailed(error instanceof Error ? error.message : 'could not open that file');
         }
       })();
     },
-    [onOpenFile, rootNodes],
+    [choosingFolderFor, onChooseFolder, onOpenFile, rootNodes],
   );
 
   return (
@@ -173,6 +186,11 @@ export function DirectoryTree({ roots, onOpenFile }: DirectoryTreeProps): React.
                       isSelected && 'bg-accent',
                       isFocusVisible && 'outline outline-2 outline-offset-[-2px] outline-ring',
                       node.kind === 'file' && !node.supported && !node.pending && 'opacity-50',
+                      // While picking a data folder, files are not targets.
+                      choosingFolderFor !== null && node.kind === 'file' && 'opacity-40',
+                      choosingFolderFor !== null &&
+                        node.kind === 'directory' &&
+                        'font-medium text-foreground',
                     )}
                   >
                     {hasChildItems ? (

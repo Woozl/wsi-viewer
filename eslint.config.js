@@ -34,7 +34,13 @@ export default tseslint.config(
       // OpenLayers' keyboard pan and zoom to reach it.
       'jsx-a11y/no-noninteractive-tabindex': [
         'error',
-        { tags: [], roles: ['tabpanel', 'application'] },
+        // A focusable separator with aria-valuenow is the ARIA window-splitter
+        // pattern, which the rule does not model.
+        { tags: [], roles: ['tabpanel', 'application', 'separator'] },
+      ],
+      'jsx-a11y/no-noninteractive-element-interactions': [
+        'error',
+        { handlers: ['onClick', 'onMouseDown', 'onMouseUp', 'onKeyPress', 'onKeyUp'] },
       ],
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
 
