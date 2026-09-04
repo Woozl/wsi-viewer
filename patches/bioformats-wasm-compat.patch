@@ -1,6 +1,6 @@
 diff -ru orig/src/common/mod.rs new/src/common/mod.rs
---- a/src/common/mod.rs	2026-09-03 18:47:02
-+++ b/src/common/mod.rs	2026-09-03 18:47:02
+--- a/src/common/mod.rs	2026-09-04 11:04:16
++++ b/src/common/mod.rs	2026-09-04 11:04:16
 @@ -13,3 +13,34 @@
  pub mod region;
  pub mod writer;
@@ -37,8 +37,8 @@ diff -ru orig/src/common/mod.rs new/src/common/mod.rs
 +    }
 +}
 diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
---- a/src/formats/camera2.rs	2026-09-03 18:47:02
-+++ b/src/formats/camera2.rs	2026-09-03 18:47:02
+--- a/src/formats/camera2.rs	2026-09-04 11:04:15
++++ b/src/formats/camera2.rs	2026-09-04 11:04:16
 @@ -2289,9 +2289,9 @@
          drop(stream);
          drop(comp);
@@ -52,8 +52,8 @@ diff -ru orig/src/formats/camera2.rs new/src/formats/camera2.rs
              stream_path.replace(['/', '\\', ' '], "_")
          ));
 diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
---- a/src/formats/eps.rs	2026-09-03 18:47:02
-+++ b/src/formats/eps.rs	2026-09-03 18:47:02
+--- a/src/formats/eps.rs	2026-09-04 11:04:15
++++ b/src/formats/eps.rs	2026-09-04 11:04:16
 @@ -52,8 +52,8 @@
  
          // Delegate to the project TiffReader via a temporary file, since it
@@ -66,8 +66,8 @@ diff -ru orig/src/formats/eps.rs new/src/formats/eps.rs
  
          let result = (|| -> Result<(ImageMetadata, Vec<u8>)> {
 diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
---- a/src/formats/flim2.rs	2026-09-03 18:47:02
-+++ b/src/formats/flim2.rs	2026-09-03 18:47:02
+--- a/src/formats/flim2.rs	2026-09-04 11:04:15
++++ b/src/formats/flim2.rs	2026-09-04 11:04:16
 @@ -4224,9 +4224,9 @@
              ))
          })?;
@@ -81,8 +81,8 @@ diff -ru orig/src/formats/flim2.rs new/src/formats/flim2.rs
          ));
          std::fs::create_dir_all(&extracted_dir).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
---- a/src/formats/misc4.rs	2026-09-03 18:47:02
-+++ b/src/formats/misc4.rs	2026-09-03 18:47:02
+--- a/src/formats/misc4.rs	2026-09-04 11:04:15
++++ b/src/formats/misc4.rs	2026-09-04 11:04:16
 @@ -2184,10 +2184,10 @@
              && (bytes[..2] == *b"II" || bytes[..2] == *b"MM")
              && (bytes[2] == 42 || bytes[3] == 42);
@@ -97,8 +97,8 @@ diff -ru orig/src/formats/misc4.rs new/src/formats/misc4.rs
              ));
              std::fs::write(&tmp, &bytes).map_err(BioFormatsError::Io)?;
 diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
---- a/src/formats/olympus.rs	2026-09-03 18:47:02
-+++ b/src/formats/olympus.rs	2026-09-03 18:47:02
+--- a/src/formats/olympus.rs	2026-09-04 11:04:15
++++ b/src/formats/olympus.rs	2026-09-04 11:04:16
 @@ -915,10 +915,10 @@
                      Ok(bytes) => bytes,
                      Err(_) => return fv1000_blank_plane(meta),
@@ -139,9 +139,45 @@ diff -ru orig/src/formats/olympus.rs new/src/formats/olympus.rs
      let len = bytes.len() as u64;
      let h = bytes
          .iter()
+diff -ru orig/src/formats/openslide_reader.rs new/src/formats/openslide_reader.rs
+--- a/src/formats/openslide_reader.rs	2026-09-04 11:04:15
++++ b/src/formats/openslide_reader.rs	2026-09-04 11:04:16
+@@ -18,7 +18,7 @@
+         Jpeg2000Container, JpegColorSpace, JpegSubsampling, LossyCodec,
+     };
+     use crate::common::error::{BioFormatsError, Result};
+-    use crate::common::metadata::{DimensionOrder, ImageMetadata};
++    use crate::common::metadata::{DimensionOrder, ImageMetadata, MetadataValue};
+     use crate::common::pixel_type::PixelType;
+     use crate::common::reader::FormatReader;
+ 
+@@ -192,6 +192,15 @@
+ 
+             let channel_count = slide.channel_count();
+ 
++            // OpenSlide's own properties are the only metadata these formats
++            // expose: vendor, objective power, microns per pixel and the bounds
++            // of the scanned region all arrive this way.
++            let series_metadata = slide
++                .properties()
++                .iter()
++                .map(|(key, value)| (key.clone(), MetadataValue::String(value.clone())))
++                .collect();
++
+             let meta = ImageMetadata {
+                 size_x: w0,
+                 size_y: h0,
+@@ -207,6 +216,7 @@
+                 is_indexed: false,
+                 is_little_endian: true,
+                 resolution_count: level_count,
++                series_metadata,
+                 ..Default::default()
+             };
+ 
 diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
---- a/src/formats/zip.rs	2026-09-03 18:47:02
-+++ b/src/formats/zip.rs	2026-09-03 18:47:02
+--- a/src/formats/zip.rs	2026-09-04 11:04:15
++++ b/src/formats/zip.rs	2026-09-04 11:04:16
 @@ -159,9 +159,9 @@
  
          // Unique temp directory for this archive.
@@ -154,3 +190,30 @@ diff -ru orig/src/formats/zip.rs new/src/formats/zip.rs
              COUNTER.fetch_add(1, Ordering::Relaxed)
          ));
          std::fs::create_dir_all(&dir).map_err(BioFormatsError::Io)?;
+diff -ru orig/src/registry.rs new/src/registry.rs
+--- a/src/registry.rs	2026-09-04 11:04:16
++++ b/src/registry.rs	2026-09-04 11:04:16
+@@ -136,6 +136,23 @@
+         return Ok(r);
+     }
+ 
++    // A MIRAX slide is a `.mrxs` file whose bytes are the JPEG slide overview,
++    // with the pixel data in a sibling directory. Byte sniffing therefore hands
++    // it to a JPEG reader, which reports the overview's dimensions instead of
++    // the slide's, so the suffix has to win. Mirrors the FilePattern and KLB
++    // cases above; falls through if the companion directory is missing.
++    #[cfg(feature = "openslide")]
++    if path
++        .extension()
++        .and_then(|e| e.to_str())
++        .is_some_and(|e| e.eq_ignore_ascii_case("mrxs"))
++    {
++        let mut r = boxed_reader(crate::formats::openslide_reader::OpenSlideReader::new());
++        if r.set_id(path).is_ok() {
++            return Ok(r);
++        }
++    }
++
+     // ICS1 datasets are a text `.ics` header plus raw `.ids` pixels. The raw
+     // companion has no ICS magic and can accidentally match unrelated byte
+     // probes, but Java ICSReader accepts either side by suffix.

@@ -1,0 +1,836 @@
+diff -ruN orig/build.rs new/build.rs
+--- a/build.rs	2026-09-04 10:26:45
++++ b/build.rs	2026-09-04 10:26:45
+@@ -1,98 +1,6 @@
+-use std::env;
+-use std::path::PathBuf;
+-use std::process::Command;
+-
++// The upstream build script compiles src/decode/*.c and links system libjpeg,
++// cairo and libopenjp2. None of that can target wasm32, so the C helpers are
++// replaced by Rust in src/decode/native.rs and nothing is built here.
+ fn main() {
+-    println!("cargo:rerun-if-changed=src/decode/jpeg_crop.c");
+-    println!("cargo:rerun-if-changed=src/decode/cairo_blit.c");
+-    println!("cargo:rerun-if-changed=src/decode/openjpeg_decode.c");
+-    println!("cargo:rustc-link-lib=jpeg");
+-
+-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by Cargo"));
+-    let jpeg_object = out_dir.join("jpeg_crop.o");
+-    let cairo_object = out_dir.join("cairo_blit.o");
+-    let openjpeg_object = out_dir.join("openjpeg_decode.o");
+-    let archive = out_dir.join("libnative_helpers.a");
+-
+-    let status = Command::new("cc")
+-        .args([
+-            "-std=c99",
+-            "-O2",
+-            "-fPIC",
+-            "-c",
+-            "src/decode/jpeg_crop.c",
+-            "-o",
+-        ])
+-        .arg(&jpeg_object)
+-        .status()
+-        .expect("failed to run cc for jpeg crop shim");
+-    assert!(status.success(), "cc failed while building jpeg crop shim");
+-
+-    let cairo_cflags = pkg_config_args("--cflags", "cairo");
+-    let status = Command::new("cc")
+-        .args(["-std=c99", "-O2", "-fPIC"])
+-        .args(&cairo_cflags)
+-        .args(["-c", "src/decode/cairo_blit.c", "-o"])
+-        .arg(&cairo_object)
+-        .status()
+-        .expect("failed to run cc for cairo blit shim");
+-    assert!(status.success(), "cc failed while building cairo blit shim");
+-
+-    let openjpeg_cflags = pkg_config_args("--cflags", "libopenjp2");
+-    let status = Command::new("cc")
+-        .args(["-std=c99", "-O2", "-fPIC"])
+-        .args(&openjpeg_cflags)
+-        .args(["-c", "src/decode/openjpeg_decode.c", "-o"])
+-        .arg(&openjpeg_object)
+-        .status()
+-        .expect("failed to run cc for OpenJPEG shim");
+-    assert!(status.success(), "cc failed while building OpenJPEG shim");
+-
+-    let status = Command::new("ar")
+-        .arg("crus")
+-        .arg(&archive)
+-        .arg(&jpeg_object)
+-        .arg(&cairo_object)
+-        .arg(&openjpeg_object)
+-        .status()
+-        .expect("failed to run ar for native helper shims");
+-    assert!(
+-        status.success(),
+-        "ar failed while building native helper shims"
+-    );
+-
+-    for lib in pkg_config_args("--libs", "cairo") {
+-        if let Some(path) = lib.strip_prefix("-L") {
+-            println!("cargo:rustc-link-search=native={path}");
+-        } else if let Some(name) = lib.strip_prefix("-l") {
+-            println!("cargo:rustc-link-lib={name}");
+-        }
+-    }
+-    for lib in pkg_config_args("--libs", "libopenjp2") {
+-        if let Some(path) = lib.strip_prefix("-L") {
+-            println!("cargo:rustc-link-search=native={path}");
+-        } else if let Some(name) = lib.strip_prefix("-l") {
+-            println!("cargo:rustc-link-lib={name}");
+-        }
+-    }
+-
+-    println!("cargo:rustc-link-search=native={}", out_dir.display());
+-    println!("cargo:rustc-link-lib=static=native_helpers");
+-}
+-
+-fn pkg_config_args(flag: &str, package: &str) -> Vec<String> {
+-    let output = Command::new("pkg-config")
+-        .args([flag, package])
+-        .output()
+-        .unwrap_or_else(|err| panic!("failed to run pkg-config {flag} {package}: {err}"));
+-    assert!(
+-        output.status.success(),
+-        "pkg-config {flag} {package} failed: {}",
+-        String::from_utf8_lossy(&output.stderr)
+-    );
+-    String::from_utf8(output.stdout)
+-        .expect("pkg-config output is UTF-8")
+-        .split_whitespace()
+-        .map(ToOwned::to_owned)
+-        .collect()
++    println!("cargo:rerun-if-changed=build.rs");
+ }
+diff -ruN orig/src/decode/mod.rs new/src/decode/mod.rs
+--- a/src/decode/mod.rs	2026-09-04 10:26:45
++++ b/src/decode/mod.rs	2026-09-04 10:26:45
+@@ -1,4 +1,6 @@
+ pub mod bmp;
++/// Rust replacements for the C helpers upstream compiles in build.rs.
++pub mod native;
+ pub mod jpeg;
+ pub mod jpeg2000;
+ pub mod jpegxr;
+diff -ruN orig/src/decode/native.rs new/src/decode/native.rs
+--- /dev/null
++++ b/src/decode/native.rs	2026-09-04 10:26:45
+@@ -0,0 +1,687 @@
++//! Rust implementations of the crate's C helpers.
++//!
++//! Upstream compiles `src/decode/*.c` and links system libjpeg, cairo and
++//! libopenjp2, none of which can target wasm32. These definitions provide the
++//! same symbols, so the call sites and their `extern "C"` declarations are left
++//! untouched and the patch stays small.
++//!
++//! Coverage is deliberately partial. Everything MIRAX reaches is implemented;
++//! the paths only Aperio, Ventana, Trestle and JPEG 2000 use return an error
++//! naming what is missing, rather than pretending to succeed.
++
++use std::ffi::CStr;
++use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
++use std::os::raw::{c_char, c_double, c_int, c_uchar, c_uint, c_ulong};
++use std::slice;
++
++use zune_jpeg::zune_core::colorspace::ColorSpace;
++use zune_jpeg::zune_core::options::DecoderOptions;
++use zune_jpeg::JpegDecoder;
++
++/// Writes a NUL-terminated message into a caller-supplied buffer.
++///
++/// # Safety
++/// `err` must be null or point to at least `err_len` writable bytes.
++unsafe fn set_err(err: *mut c_char, err_len: usize, message: &str) {
++    if err.is_null() || err_len == 0 {
++        return;
++    }
++    let bytes = message.as_bytes();
++    let count = bytes.len().min(err_len - 1);
++    for (index, byte) in bytes[..count].iter().enumerate() {
++        *err.add(index) = *byte as c_char;
++    }
++    *err.add(count) = 0;
++}
++
++/// Marks a path this port does not implement.
++unsafe fn unsupported(err: *mut c_char, err_len: usize, what: &str) -> c_int {
++    set_err(err, err_len, &format!("{what} is not available in the pure-Rust build"));
++    0
++}
++
++fn decode_rgb(data: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
++    // zune-jpeg reads through a reader rather than a slice, matching the
++    // crate's own decode path.
++    let options = DecoderOptions::new_fast().jpeg_set_out_colorspace(ColorSpace::RGB);
++    let mut decoder = JpegDecoder::new_with_options(BufReader::new(Cursor::new(data)), options);
++    let pixels = decoder.decode().map_err(|e| format!("JPEG decode failed: {e}"))?;
++    let info = decoder.info().ok_or_else(|| "JPEG has no image info".to_string())?;
++    Ok((pixels, u32::from(info.width), u32::from(info.height)))
++}
++
++/// Copies a sub-rectangle out of an RGB image, leaving out-of-bounds parts black.
++fn crop_rgb(
++    rgb: &[u8],
++    width: u32,
++    height: u32,
++    x: u32,
++    y: u32,
++    w: u32,
++    h: u32,
++    out: &mut [u8],
++) {
++    for row in 0..h {
++        let source_y = y + row;
++        if source_y >= height {
++            break;
++        }
++        let available = width.saturating_sub(x).min(w) as usize;
++        if available == 0 {
++            continue;
++        }
++        let source = ((source_y as usize) * (width as usize) + (x as usize)) * 3;
++        let destination = (row as usize) * (w as usize) * 3;
++        out[destination..destination + available * 3]
++            .copy_from_slice(&rgb[source..source + available * 3]);
++    }
++}
++
++fn read_from(path: &CStr, offset: u64) -> Result<Vec<u8>, String> {
++    let path = std::str::from_utf8(path.to_bytes()).map_err(|_| "path is not UTF-8".to_string())?;
++    let mut file = std::fs::File::open(path).map_err(|e| format!("open {path}: {e}"))?;
++    if offset > 0 {
++        file.seek(SeekFrom::Start(offset)).map_err(|e| format!("seek: {e}"))?;
++    }
++    let mut data = Vec::new();
++    file.read_to_end(&mut data).map_err(|e| format!("read: {e}"))?;
++    Ok(data)
++}
++
++/// Composites an RGB source into an RGBA destination.
++///
++/// Reproduces cairo's `SATURATE` operator, which is what upstream uses so that
++/// overlapping tile edges are not painted twice. With an opaque source it
++/// reduces to first-writer-wins: a pixel already covered by an earlier tile is
++/// left alone, which is exactly the seam behaviour MIRAX depends on.
++///
++/// Sampling is nearest-neighbour. Upstream's own `blit_gray_into_rgba` rounds
++/// positions the same way, so the two paths agree.
++#[allow(clippy::too_many_arguments)]
++unsafe fn blit(
++    src_rgb: *const c_uchar,
++    src_width: u32,
++    src_height: u32,
++    valid_width: u32,
++    valid_height: u32,
++    src_x: f64,
++    src_y: f64,
++    src_w: u32,
++    src_h: u32,
++    channels: [c_int; 4],
++    dst_rgba: *mut c_uchar,
++    dst_width: u32,
++    dst_height: u32,
++    dst_x: f64,
++    dst_y: f64,
++) {
++    if src_rgb.is_null() || dst_rgba.is_null() || src_w == 0 || src_h == 0 {
++        return;
++    }
++    let usable_width = valid_width.min(src_width);
++    let usable_height = valid_height.min(src_height);
++    let source = slice::from_raw_parts(src_rgb, (src_width as usize) * (src_height as usize) * 3);
++    let destination =
++        slice::from_raw_parts_mut(dst_rgba, (dst_width as usize) * (dst_height as usize) * 4);
++
++    let source_origin_x = src_x.round() as i64;
++    let source_origin_y = src_y.round() as i64;
++    let destination_origin_x = dst_x.round() as i64;
++    let destination_origin_y = dst_y.round() as i64;
++
++    for row in 0..i64::from(src_h) {
++        let sy = source_origin_y + row;
++        let dy = destination_origin_y + row;
++        if sy < 0 || sy >= i64::from(usable_height) || dy < 0 || dy >= i64::from(dst_height) {
++            continue;
++        }
++        for column in 0..i64::from(src_w) {
++            let sx = source_origin_x + column;
++            let dx = destination_origin_x + column;
++            if sx < 0 || sx >= i64::from(usable_width) || dx < 0 || dx >= i64::from(dst_width) {
++                continue;
++            }
++
++            let from = ((sy as usize) * (src_width as usize) + (sx as usize)) * 3;
++            let into = ((dy as usize) * (dst_width as usize) + (dx as usize)) * 4;
++
++            // SATURATE: how much of the source this pixel can still admit.
++            let covered = f32::from(destination[into + 3]) / 255.0;
++            let admits = 1.0 - covered;
++            if admits <= 0.0 {
++                continue;
++            }
++
++            for (component, channel) in channels.iter().enumerate().take(3) {
++                let value = match *channel {
++                    0..=2 => f32::from(source[from + (*channel as usize)]),
++                    _ => 0.0,
++                };
++                let existing = f32::from(destination[into + component]);
++                destination[into + component] = (existing + admits * value).min(255.0) as u8;
++            }
++
++            // A source channel for alpha is only used by formats that carry one;
++            // MIRAX tiles are opaque, so the default fully covers the pixel.
++            let source_alpha = match channels[3] {
++                0..=2 => f32::from(source[from + (channels[3] as usize)]),
++                _ => 255.0,
++            };
++            destination[into + 3] =
++                (f32::from(destination[into + 3]) + admits * source_alpha).min(255.0) as u8;
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Compositing
++// ---------------------------------------------------------------------------
++
++/// # Safety
++/// Pointers must describe buffers of the sizes implied by the dimensions.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_cairo_blit_rgb_to_rgba_clipped_dst(
++    src_rgb: *const c_uchar,
++    src_width: c_uint,
++    src_height: c_uint,
++    valid_width: c_uint,
++    valid_height: c_uint,
++    src_x: c_double,
++    src_y: c_double,
++    src_w: c_uint,
++    src_h: c_uint,
++    channel_r: c_int,
++    channel_g: c_int,
++    channel_b: c_int,
++    channel_a: c_int,
++    dst_rgba: *mut c_uchar,
++    dst_width: c_uint,
++    dst_height: c_uint,
++    dst_x: c_double,
++    dst_y: c_double,
++    _err: *mut c_char,
++    _err_len: usize,
++) -> c_int {
++    blit(
++        src_rgb,
++        src_width,
++        src_height,
++        valid_width,
++        valid_height,
++        src_x,
++        src_y,
++        src_w,
++        src_h,
++        [channel_r, channel_g, channel_b, channel_a],
++        dst_rgba,
++        dst_width,
++        dst_height,
++        dst_x,
++        dst_y,
++    );
++    1
++}
++
++/// # Safety
++/// See [`osr_cairo_blit_rgb_to_rgba_clipped_dst`].
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_cairo_blit_rgb_to_rgba(
++    src_rgb: *const c_uchar,
++    src_w: c_uint,
++    src_h: c_uint,
++    visible_w: c_uint,
++    visible_h: c_uint,
++    src_x: c_double,
++    src_y: c_double,
++    src_region_w: c_uint,
++    src_region_h: c_uint,
++    r_channel: c_int,
++    g_channel: c_int,
++    b_channel: c_int,
++    a_channel: c_int,
++    dst_rgba: *mut c_uchar,
++    dst_w: c_uint,
++    dst_h: c_uint,
++    dst_x: c_double,
++    dst_y: c_double,
++    _err: *mut c_char,
++    _err_len: usize,
++) -> c_int {
++    blit(
++        src_rgb,
++        src_w,
++        src_h,
++        visible_w,
++        visible_h,
++        src_x,
++        src_y,
++        src_region_w,
++        src_region_h,
++        [r_channel, g_channel, b_channel, a_channel],
++        dst_rgba,
++        dst_w,
++        dst_h,
++        dst_x,
++        dst_y,
++    );
++    1
++}
++
++/// # Safety
++/// `src_xs`, `src_ys`, `dst_xs` and `dst_ys` must each hold `count` values.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_cairo_blit_rgb_to_rgba_many_same_src(
++    src_rgb: *const c_uchar,
++    src_width: c_uint,
++    src_height: c_uint,
++    valid_width: c_uint,
++    valid_height: c_uint,
++    src_xs: *const c_double,
++    src_ys: *const c_double,
++    src_w: c_uint,
++    src_h: c_uint,
++    channel_r: c_int,
++    channel_g: c_int,
++    channel_b: c_int,
++    channel_a: c_int,
++    dst_rgba: *mut c_uchar,
++    dst_width: c_uint,
++    dst_height: c_uint,
++    dst_xs: *const c_double,
++    dst_ys: *const c_double,
++    count: usize,
++    _err: *mut c_char,
++    _err_len: usize,
++) -> c_int {
++    if src_xs.is_null() || src_ys.is_null() || dst_xs.is_null() || dst_ys.is_null() {
++        return 0;
++    }
++    for index in 0..count {
++        blit(
++            src_rgb,
++            src_width,
++            src_height,
++            valid_width,
++            valid_height,
++            *src_xs.add(index),
++            *src_ys.add(index),
++            src_w,
++            src_h,
++            [channel_r, channel_g, channel_b, channel_a],
++            dst_rgba,
++            dst_width,
++            dst_height,
++            *dst_xs.add(index),
++            *dst_ys.add(index),
++        );
++    }
++    1
++}
++
++// ---------------------------------------------------------------------------
++// JPEG
++// ---------------------------------------------------------------------------
++
++/// # Safety
++/// `data` must hold `len` bytes and `out` must hold `expected_w * expected_h * 3`.
++#[no_mangle]
++pub unsafe extern "C" fn osr_jpeg_decode_rgb(
++    data: *const c_uchar,
++    len: usize,
++    expected_w: c_uint,
++    expected_h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    let input = slice::from_raw_parts(data, len);
++    match decode_rgb(input) {
++        Ok((rgb, width, height)) => {
++            let wanted = (expected_w as usize) * (expected_h as usize) * 3;
++            let target = slice::from_raw_parts_mut(out, wanted);
++            target.fill(0);
++            crop_rgb(&rgb, width, height, 0, 0, expected_w, expected_h, target);
++            1
++        }
++        Err(message) => {
++            set_err(err, err_len, &message);
++            0
++        }
++    }
++}
++
++/// # Safety
++/// `data` must hold `len` bytes; `width` and `height` must be writable.
++#[no_mangle]
++pub unsafe extern "C" fn osr_jpeg_dimensions(
++    data: *const c_uchar,
++    len: usize,
++    width: *mut c_uint,
++    height: *mut c_uint,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    let input = slice::from_raw_parts(data, len);
++    let mut decoder = JpegDecoder::new(BufReader::new(Cursor::new(input)));
++    if decoder.decode_headers().is_err() {
++        set_err(err, err_len, "could not read JPEG headers");
++        return 0;
++    }
++    match decoder.info() {
++        Some(info) => {
++            *width = c_uint::from(info.width);
++            *height = c_uint::from(info.height);
++            1
++        }
++        None => {
++            set_err(err, err_len, "JPEG has no image info");
++            0
++        }
++    }
++}
++
++/// # Safety
++/// `data` must hold `len` bytes and `out` must hold `w * h * 3`.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_crop_rgb(
++    data: *const c_uchar,
++    len: usize,
++    x: c_uint,
++    y: c_uint,
++    w: c_uint,
++    h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    let input = slice::from_raw_parts(data, len);
++    match decode_rgb(input) {
++        Ok((rgb, width, height)) => {
++            let target = slice::from_raw_parts_mut(out, (w as usize) * (h as usize) * 3);
++            target.fill(0);
++            crop_rgb(&rgb, width, height, x, y, w, h, target);
++            1
++        }
++        Err(message) => {
++            set_err(err, err_len, &message);
++            0
++        }
++    }
++}
++
++/// # Safety
++/// `data` must hold `len` bytes and `out` must hold `w * h`.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_crop_channel(
++    data: *const c_uchar,
++    len: usize,
++    channel: c_uint,
++    x: c_uint,
++    y: c_uint,
++    w: c_uint,
++    h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    let input = slice::from_raw_parts(data, len);
++    match decode_rgb(input) {
++        Ok((rgb, width, height)) => {
++            let target = slice::from_raw_parts_mut(out, (w as usize) * (h as usize));
++            target.fill(0);
++            let component = (channel as usize).min(2);
++            for row in 0..h {
++                let source_y = y + row;
++                if source_y >= height {
++                    break;
++                }
++                for column in 0..w {
++                    let source_x = x + column;
++                    if source_x >= width {
++                        break;
++                    }
++                    let from = ((source_y as usize) * (width as usize) + (source_x as usize)) * 3;
++                    target[(row as usize) * (w as usize) + (column as usize)] = rgb[from + component];
++                }
++            }
++            1
++        }
++        Err(message) => {
++            set_err(err, err_len, &message);
++            0
++        }
++    }
++}
++
++/// # Safety
++/// See [`osr_jpeg_decode_rgb`]. zune-jpeg applies the YCbCr transform itself.
++#[no_mangle]
++pub unsafe extern "C" fn osr_jpeg_decode_tiff_ycbcr_rgb(
++    data: *const c_uchar,
++    len: usize,
++    expected_w: c_uint,
++    expected_h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    osr_jpeg_decode_rgb(data, len, expected_w, expected_h, out, err, err_len)
++}
++
++/// # Safety
++/// `path` must be a valid C string and `out` must hold `w * h * 3`.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_file_crop_rgb(
++    path: *const c_char,
++    offset: u64,
++    x: c_uint,
++    y: c_uint,
++    w: c_uint,
++    h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    match read_from(CStr::from_ptr(path), offset) {
++        Ok(data) => osr_jpeg_crop_rgb(data.as_ptr(), data.len(), x, y, w, h, out, err, err_len),
++        Err(message) => {
++            set_err(err, err_len, &message);
++            0
++        }
++    }
++}
++
++/// # Safety
++/// `path` must be a valid C string and `out` must hold `w * h`.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_file_crop_channel(
++    path: *const c_char,
++    offset: u64,
++    channel: c_uint,
++    x: c_uint,
++    y: c_uint,
++    w: c_uint,
++    h: c_uint,
++    out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    match read_from(CStr::from_ptr(path), offset) {
++        Ok(data) => osr_jpeg_crop_channel(
++            data.as_ptr(),
++            data.len(),
++            channel,
++            x,
++            y,
++            w,
++            h,
++            out,
++            err,
++            err_len,
++        ),
++        Err(message) => {
++            set_err(err, err_len, &message);
++            0
++        }
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Paths this port does not provide
++// ---------------------------------------------------------------------------
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_file_range_rgb(
++    _path: *const c_char,
++    _header_start: u64,
++    _sof_position: u64,
++    _header_stop: u64,
++    _data_start: u64,
++    _data_stop: u64,
++    _tile_w: c_uint,
++    _tile_h: c_uint,
++    _scale_denom: c_uint,
++    _expected_w: c_uint,
++    _expected_h: c_uint,
++    _out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "libjpeg's split header/scan decode")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_memory_range_rgb(
++    _buffer: *mut c_uchar,
++    _len: usize,
++    _sof_offset: u64,
++    _tile_w: c_uint,
++    _tile_h: c_uint,
++    _scale_denom: c_uint,
++    _expected_w: c_uint,
++    _expected_h: c_uint,
++    _out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "libjpeg's in-memory range decode")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_file_sampled_rgb(
++    _path: *const c_char,
++    _offset: u64,
++    _x: c_uint,
++    _y: c_uint,
++    _w: c_uint,
++    _h: c_uint,
++    _sample_x0: c_double,
++    _sample_y0: c_double,
++    _sample_step: c_double,
++    _out_w: c_uint,
++    _out_h: c_uint,
++    _use_libjpeg_scale: c_int,
++    _out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "libjpeg's scaled decode")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_crop_bgra_rgb(
++    _data: *const c_uchar,
++    _len: usize,
++    _x: c_uint,
++    _y: c_uint,
++    _w: c_uint,
++    _h: c_uint,
++    _jpeg_color_space: c_int,
++    _out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "BGRA JPEG cropping")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_tiff_bgra_crop_rgb(
++    _data: *const c_uchar,
++    _len: usize,
++    _tables: *const c_uchar,
++    _tables_len: usize,
++    _x: c_uint,
++    _y: c_uint,
++    _w: c_uint,
++    _h: c_uint,
++    _jpeg_color_space: c_int,
++    _out: *mut c_uchar,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "TIFF BGRA JPEG cropping")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_jpeg_lossless_crop(
++    _data: *const c_uchar,
++    _len: usize,
++    _x: c_uint,
++    _y: c_uint,
++    _w: c_uint,
++    _h: c_uint,
++    _out: *mut *mut c_uchar,
++    _out_len: *mut c_ulong,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    // A DCT-domain transform, so there is no way to approximate it by decoding.
++    unsupported(err, err_len, "lossless JPEG cropping")
++}
++
++/// # Safety
++/// Only `err` is dereferenced.
++#[no_mangle]
++#[allow(clippy::too_many_arguments)]
++pub unsafe extern "C" fn osr_openjpeg_decode_rgb(
++    _data: *const u8,
++    _len: usize,
++    _width: c_uint,
++    _height: c_uint,
++    _ycbcr: c_int,
++    _out: *mut u8,
++    err: *mut c_char,
++    err_len: usize,
++) -> c_int {
++    unsupported(err, err_len, "JPEG 2000 decoding")
++}
++
++/// # Safety
++/// Nothing is freed: no function here hands out an owned buffer.
++#[no_mangle]
++pub unsafe extern "C" fn osr_jpeg_free_buffer(_buffer: *mut c_uchar) {}
+diff -ruN orig/src/util.rs new/src/util.rs
+--- a/src/util.rs	2026-09-04 10:26:45
++++ b/src/util.rs	2026-09-04 10:26:45
+@@ -59,12 +59,19 @@
+ }
+ 
+ pub fn _openslide_fclone(file: &OpenSlideFile) -> Result<File> {
+-    file.file.try_clone().map_err(|err| {
+-        OpenSlideError::Io(std::io::Error::new(
+-            err.kind(),
+-            format!("Couldn't clone file {}: {err}", file.path.display()),
+-        ))
+-    })
++    // WASI cannot duplicate a descriptor, so `try_clone` fails outright there.
++    // Reopening by path is equivalent for every caller: each one either seeks
++    // before reading or hands the file to a TIFF decoder, which seeks itself,
++    // so the fresh file position is never observed.
++    match file.file.try_clone() {
++        Ok(clone) => Ok(clone),
++        Err(_) => File::open(&file.path).map_err(|err| {
++            OpenSlideError::Io(std::io::Error::new(
++                err.kind(),
++                format!("Couldn't reopen file {}: {err}", file.path.display()),
++            ))
++        }),
++    }
+ }
+ 
+ pub fn _openslide_fopen_std(path: &Path) -> Result<File> {

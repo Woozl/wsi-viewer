@@ -24,7 +24,7 @@ import {
   toRgba,
   type DisplayRange,
 } from '../pixels';
-import type { DetectResult, WorkerRequest, WorkerResponse } from './protocol';
+import type { DetectResult, TilePayload, WorkerRequest, WorkerResponse } from './protocol';
 
 
 let core: SlideCore | null = null;
@@ -69,6 +69,7 @@ function handleFor(active: SlideCore, series: number, resolution: number): numbe
 function closeAll(): void {
   if (core !== null) for (const handle of handles.values()) core.close(handle);
   handles.clear();
+  regionOnly.clear();
   core = null;
 }
 
@@ -135,10 +136,9 @@ async function readTile(
   row: number,
 ): Promise<ImageBitmap | null> {
   const handle = handleFor(active, series, resolution);
-  const record = parseRecord(
-    active.compressedTileJson(handle, 0, resolution, col, row),
-    'tile',
-  );
+  const json = active.compressedTileJson(handle, 0, resolution, col, row);
+  if (json === null) return null;
+  const record = parseRecord(json, 'tile');
   const payload = record['payload'];
   if (!isRecord(payload)) throw new Error('tile: missing payload');
 
@@ -160,6 +160,70 @@ async function readTile(
   return null;
 }
 
+/** Smallest pyramid level of a series, or null when none was reported. */
+function coarsestLevel(series: number): LevelCandidate | null {
+  return levelCandidates
+    .filter((entry) => entry.series === series)
+    .reduce<LevelCandidate | null>(
+      (best, entry) =>
+        best === null || entry.width * entry.height < best.width * best.height ? entry : best,
+      null,
+    );
+}
+
+/**
+ * Largest level a thumbnail will decode.
+ *
+ * An overview is built by decoding a whole level into linear memory. A slide
+ * whose coarsest level is still enormous therefore gets no overview rather than
+ * an allocation failure, because a trap would poison the instance for every
+ * later read as well.
+ */
+const MAX_THUMBNAIL_PIXELS = 16 * 1024 * 1024;
+
+/**
+ * Levels that advertised tiling but could not serve a stored block, keyed as
+ * `series:resolution`.
+ *
+ * Tracked so the fallback is paid once per level rather than once per tile. A
+ * level that drops to region reads stays correct, only slower, so a level that
+ * is merely sparse loses nothing by being recorded here.
+ */
+const regionOnly = new Set<string>();
+
+/** Picks the cheapest read that can supply a tile, degrading as needed. */
+async function readAnyTile(
+  active: SlideCore,
+  request: {
+    series: number;
+    resolution: number;
+    col: number;
+    row: number;
+    tileWidth: number;
+    tileHeight: number;
+    levelWidth: number;
+    levelHeight: number;
+    planes: readonly number[];
+    compressed: boolean;
+  },
+): Promise<TilePayload | null> {
+  if (request.planes.length > 0) return readBandTile(active, request);
+
+  const key = `${String(request.series)}:${String(request.resolution)}`;
+  if (request.compressed && !regionOnly.has(key)) {
+    const tile = await readTile(
+      active,
+      request.series,
+      request.resolution,
+      request.col,
+      request.row,
+    );
+    if (tile !== null) return tile;
+    regionOnly.add(key);
+  }
+  return await readRegionTile(active, request);
+}
+
 /**
  * Display range for a series, computed once and reused.
  *
@@ -177,11 +241,7 @@ function displayRangeFor(active: SlideCore, series: number, info: SeriesInfo): D
 
   // Sample the coarsest level of this series, which is the cheapest read that
   // still covers the whole field of view.
-  const levels = levelCandidates.filter((entry) => entry.series === series);
-  const coarsest = levels.reduce<LevelCandidate | null>(
-    (best, entry) => (best === null || entry.width * entry.height < best.width * best.height ? entry : best),
-    null,
-  );
+  const coarsest = coarsestLevel(series);
 
   let range = FULL_8_BIT;
   try {
@@ -331,20 +391,24 @@ async function readThumbnail(
   const info = seriesInfo.find((entry) => entry.series === series);
   if (info === undefined || info.width === 0 || info.height === 0) return null;
 
-  const handle = handleFor(active, series, 0);
-  const pixels = active.readRegion(handle, 0, 0, 0, info.width, info.height);
-  const range = displayRangeFor(active, series, info);
-  const image = new ImageData(
-    toRgba(pixels, info, info.width, info.height, range),
-    info.width,
-    info.height,
-  );
+  // The coarsest level, never the base one: a whole-slide image's base level
+  // decodes to hundreds of gigabytes, and the result is only ever displayed at
+  // `maxSize` anyway.
+  const level = coarsestLevel(series);
+  const width = level?.width ?? info.width;
+  const height = level?.height ?? info.height;
+  if (width * height > MAX_THUMBNAIL_PIXELS) return null;
 
-  const scale = Math.min(1, maxSize / Math.max(info.width, info.height));
+  const handle = handleFor(active, series, level?.resolution ?? 0);
+  const pixels = active.readRegion(handle, 0, 0, 0, width, height);
+  const range = displayRangeFor(active, series, info);
+  const image = new ImageData(toRgba(pixels, info, width, height, range), width, height);
+
+  const scale = Math.min(1, maxSize / Math.max(width, height));
   if (scale === 1) return await createImageBitmap(image);
   return await createImageBitmap(image, {
-    resizeWidth: Math.max(1, Math.round(info.width * scale)),
-    resizeHeight: Math.max(1, Math.round(info.height * scale)),
+    resizeWidth: Math.max(1, Math.round(width * scale)),
+    resizeHeight: Math.max(1, Math.round(height * scale)),
     resizeQuality: 'high',
   });
 }
@@ -403,12 +467,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>): void => {
         }
         case 'tile': {
           if (core === null) throw new Error('no slide is open');
-          const value =
-            request.planes.length > 0
-              ? readBandTile(core, request)
-              : request.compressed
-                ? await readTile(core, request.series, request.resolution, request.col, request.row)
-                : await readRegionTile(core, request);
+          const value = await readAnyTile(core, request);
           reply(
             { id: request.id, ok: true, kind: 'tile', value },
             value === null ? [] : [value instanceof Float32Array ? value.buffer : value],

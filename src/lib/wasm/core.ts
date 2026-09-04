@@ -284,12 +284,23 @@ export class SlideCore {
     return text;
   }
 
-  compressedTileJson(handle: number, plane: number, level: number, col: number, row: number): string {
-    const text = this.takeText(
+  /**
+   * Stored bytes for one tile, or null when this level cannot serve them.
+   *
+   * Readers that composite their tiles rather than storing them whole — every
+   * openslide-backed format does — answer only region reads, so a null here is
+   * an ordinary outcome rather than a failure.
+   */
+  compressedTileJson(
+    handle: number,
+    plane: number,
+    level: number,
+    col: number,
+    row: number,
+  ): string | null {
+    return this.takeText(
       this.exports.bf_compressed_tile_json(handle, plane, level, BigInt(col), BigInt(row)),
     );
-    if (text === null) throw new Error(`could not read tile: ${this.lastError()}`);
-    return text;
   }
 
   /** Reads owned tile bytes previously reported by `compressedTileJson`. */

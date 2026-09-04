@@ -11,9 +11,23 @@ import { Fd, Inode, wasi } from '@bjorn3/browser_wasi_shim';
  * WASI's read operations are synchronous, which is why this only works inside a
  * worker: `FileReaderSync` has no main-thread equivalent.
  */
+/**
+ * Bytes pulled in when a small read misses the window.
+ *
+ * A `FileReaderSync` call costs roughly the same whatever its size, and some
+ * readers walk their index structures one scalar at a time: MIRAX issues over
+ * half a million 4-byte reads while mapping a slide's tiles, which is instant
+ * against a native descriptor but takes minutes one `Blob` slice at a time.
+ * Buffering makes that cost scale with bytes touched rather than read count.
+ */
+const WINDOW_BYTES = 256 * 1024;
+
 class LazyFileFd extends Fd {
   private position = 0n;
   private readonly reader = new FileReaderSync();
+  /** Bytes cached from the file, starting at `windowStart`. */
+  private window: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+  private windowStart = 0;
 
   constructor(
     private readonly file: File,
@@ -22,13 +36,25 @@ class LazyFileFd extends Fd {
     super();
   }
 
+  private slice(start: number, end: number): Uint8Array<ArrayBuffer> {
+    return new Uint8Array(this.reader.readAsArrayBuffer(this.file.slice(start, end)));
+  }
+
   private readAt(offset: bigint, size: number): Uint8Array {
     const start = Number(offset);
     if (!Number.isFinite(start) || start < 0 || start >= this.file.size) {
       return new Uint8Array(0);
     }
     const end = Math.min(start + size, this.file.size);
-    return new Uint8Array(this.reader.readAsArrayBuffer(this.file.slice(start, end)));
+    // Anything larger than the window goes straight through: tile payloads are
+    // big enough that per-call overhead is already negligible, and buffering
+    // them would only copy the bytes a second time.
+    if (end - start > WINDOW_BYTES) return this.slice(start, end);
+    if (start < this.windowStart || end > this.windowStart + this.window.length) {
+      this.windowStart = start;
+      this.window = this.slice(start, Math.min(start + WINDOW_BYTES, this.file.size));
+    }
+    return this.window.slice(start - this.windowStart, end - this.windowStart);
   }
 
   override fd_pread(size: number, offset: bigint): { ret: number; data: Uint8Array } {

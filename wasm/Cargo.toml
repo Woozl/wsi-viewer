@@ -11,7 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # `zarr`/`tissuefaxs` pull in zstd-sys and libsqlite3-sys, which are C and cannot
 # target wasm32. Everything else in the crate is pure Rust.
-bioformats = { version = "0.1.8", default-features = false }
+bioformats = { version = "0.1.8", default-features = false, features = ["openslide"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -23,6 +23,10 @@ hdf5-pure-rust = { path = "../vendor/hdf5-pure-rust" }
 # readers use them to stage bytes through a temporary file. See
 # patches/bioformats-wasm-compat.patch.
 bioformats = { path = "../vendor/bioformats" }
+# openslide-pure-rs is pure Rust in name only: its build script compiles three C
+# files against system libjpeg, cairo and libopenjp2. See
+# patches/openslide-pure-rs-no-c.patch.
+openslide-pure-rs = { path = "../vendor/openslide-pure-rs" }
 
 # Slide decoding is on the interaction path, so favour speed; `release-size` exists
 # to measure the size/latency trade-off.

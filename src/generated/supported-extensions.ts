@@ -120,6 +120,7 @@ export const SUPPORTED_EXTENSIONS = [
   "mrc",
   "mrcs",
   "mrw",
+  "mrxs",
   "msr",
   "mtb",
   "mvd2",

@@ -7,7 +7,7 @@ to WebAssembly; no server sees the data, and the build output is static files.
 ## What it does
 
 - Opens slides in the formats bioformats' readers claim — Aperio SVS, pyramidal
-  OME-TIFF, DICOM, CZI and others
+  OME-TIFF, DICOM, CZI, 3DHISTECH MIRAX and others
 - Pans and zooms a gigapixel pyramid at interactive speed
 - Shows the slide's full format metadata, pyramid layout and associated images
 - Overview map showing where the viewport sits, with click-to-navigate
@@ -53,11 +53,28 @@ from there, and a preopen placed earlier is invisible to the guest.
 
 **Three dependencies had to be dealt with.** `hdf5-pure-rust` defines three guard
 constants as `4 * 1024 * 1024 * 1024` — exactly 2³² — which overflows a 32-bit
-`usize` during const evaluation; it is fetched and patched at build time by
-`scripts/prepare-vendor.mjs`. The `zarr` and `tissuefaxs` features pull in
-`zstd-sys` and `libsqlite3-sys`, and the `openslide` feature pulls in
-`openslide-pure-rs`, which despite its name compiles 2,400 lines of C against
-system libjpeg, cairo and libopenjp2. All three are disabled.
+`usize` during const evaluation. The `zarr` and `tissuefaxs` features pull in
+`zstd-sys` and `libsqlite3-sys`, and are disabled. `openslide-pure-rs`, despite
+its name, compiles 2,400 lines of C against system libjpeg, cairo and libopenjp2.
+All three are fetched and patched at build time by `scripts/prepare-vendor.mjs`,
+which keeps the patches reviewable in `patches/` instead of committing three
+vendored crates.
+
+**The openslide feature's C shims were ported to Rust.** Its sixteen `osr_*`
+symbols are declared in `extern "C"` blocks and called from a dozen places, so
+the port supplies them as `#[no_mangle] extern "C"` Rust functions and leaves
+every call site untouched. Most are JPEG entry points, answered with `zune-jpeg`,
+plus three cairo blits that reproduce cairo's `SATURATE` operator — with an
+opaque source it reduces to first-writer-wins, which is how overlapping tile
+edges avoid being painted twice. Seven remain stubs that return a clear error:
+JPEG 2000, lossless JPEG, the sampled and byte-range readers, and the BGRA crops.
+No reader reachable from the enabled feature set calls them.
+
+WASI's `std` has gaps that this crate walks into. `std::env::temp_dir()` panics
+outright, `std::process::id()` is unsupported, and `File::try_clone()` cannot
+duplicate a descriptor — the last is patched to reopen by path, which every
+caller tolerates because each one seeks before reading or hands the file to a
+TIFF decoder that seeks itself.
 
 **Pyramids are reconstructed, not read.** A format exposes its pyramid either as
 several single-resolution series (Aperio) or as one series with several
@@ -65,13 +82,37 @@ resolutions (pyramidal OME-TIFF). Both are flattened into `(series, resolution)`
 candidates and grouped by aspect ratio, which recovers the pyramid and leaves
 label and macro images out of it.
 
+**A `.mrxs` file has to be dispatched by suffix.** Its bytes are the slide's JPEG
+overview, with the pixel data in a sibling directory, so byte sniffing hands it
+to a JPEG reader that duly reports the overview's dimensions instead of the
+slide's. The registry therefore matches the extension before it sniffs, the same
+way it already special-cases file patterns and ICS.
+
+**Small reads are buffered.** Reads are served by slicing a `File`, and a
+`FileReaderSync` call costs about the same whatever its size, so a reader that
+walks its index one scalar at a time is pathological: MIRAX issues over half a
+million 4-byte reads — 2.2 MB in total — while mapping a slide's tiles, which
+took three minutes one slice at a time. A 256 KB window makes the cost scale with
+bytes touched rather than read count, and the same open now takes 0.8 s. Reads
+larger than the window pass straight through, since a tile payload is already
+big enough that per-call overhead is noise.
+
 **Tiles avoid a decode where possible.** Stored JPEG blocks are handed straight
 to the browser's decoder in a worker and transferred as `ImageBitmap`, so no
 pixel data crosses the main thread. Aperio writes three-component tiles that are
 already RGB but omits the JFIF and Adobe markers, and a decoder seeing three
 components with no marker must assume YCbCr — the slide renders magenta and
 green. An APP14 segment declaring `transform = 0` is injected to correct it.
-Levels with no compressed blocks fall back to decoding regions.
+Levels with no compressed blocks fall back to decoding regions — every
+openslide-backed format composites its tiles rather than storing them whole, so
+it only ever answers region reads, and the fallback is remembered per level so
+it is paid once instead of once per tile.
+
+The overview is built from the coarsest pyramid level for the same reason a
+pyramid exists: this MIRAX slide's base level is 289,792 × 620,544, which decodes
+to 539 GB and traps the allocator. A slide whose coarsest level is still enormous
+gets no overview rather than a trap, because a trap would poison the instance for
+every later read too.
 
 **Panels dock to any edge.** The arrangement is described by which dock each
 panel sits in plus one global ordering, so moving a panel between docks never
@@ -107,13 +148,19 @@ readers such as `NdpiReader` that also inspect file contents inside
 
 ## Limitations
 
-- No MIRAX, Ventana, Trestle, Sakura or Philips support: those come from the
-  `openslide` feature, which cannot reach WebAssembly without porting its C
-  shims to Rust.
-- Formats whose data lives in a sibling folder (OIF, AFI, NDPIS) can only be
-  opened through the Folders panel, since the file input hands over a single
+- MIRAX is the only format the `openslide` feature adds. The crate deliberately
+  routes just `.mrxs` to its OpenSlide reader; Ventana, Trestle, Sakura, Philips
+  and the rest go to native readers with fuller Bio-Formats metadata, and those
+  readers are what limits them, not the port.
+- A MIRAX slide's unscanned margin renders black. OpenSlide reports it as
+  transparent, but the bridge into bioformats reads three channels and so drops
+  the alpha that would say which pixels are background. Nothing distinguishes
+  unscanned from genuinely black afterwards, so it is left as the reader
+  reported it rather than guessed at.
+- Formats whose data lives in a sibling folder (MIRAX, OIF, AFI, NDPIS) can only
+  be opened through the Folders panel, since the file input hands over a single
   file with no way to reach its siblings.
-- No Zarr/OME-Zarr or TissueFAXS, for the same reason.
+- No Zarr/OME-Zarr or TissueFAXS: their features pull in C dependencies too.
 - The folder tree needs the File System Access API, so it is Chromium-only.
   Everything else works everywhere; the file input is the fallback.
 - The URL records the camera but cannot record the slide, because a `File`

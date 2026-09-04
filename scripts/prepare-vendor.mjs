@@ -4,10 +4,13 @@
 // the repository: together they are ~10 MB of source for a few dozen changed
 // lines. Runs identically locally and in CI.
 //
-//   hdf5-pure-rust  Three guard constants are 4 * 1024 * 1024 * 1024, exactly
-//                   2^32, which overflows a 32-bit usize at const-eval time.
-//   bioformats      Readers that hand a path to another reader stage bytes via
-//                   std::env::temp_dir(), which panics outright on wasm.
+//   hdf5-pure-rust     Three guard constants are 4 * 1024 * 1024 * 1024, exactly
+//                      2^32, which overflows a 32-bit usize at const-eval time.
+//   bioformats         Readers that hand a path to another reader stage bytes
+//                      via std::env::temp_dir(), which panics outright on wasm;
+//                      and a .mrxs needs its suffix to beat its JPEG magic.
+//   openslide-pure-rs  Pure Rust in name only: its build script compiles three
+//                      C files against libjpeg, cairo and libopenjp2.
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -21,6 +24,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VENDORED = [
   { crate: 'hdf5-pure-rust', version: '0.3.10', patch: 'hdf5-pure-rust-wasm32.patch' },
   { crate: 'bioformats', version: '0.1.8', patch: 'bioformats-wasm-compat.patch' },
+  { crate: 'openslide-pure-rs', version: '0.1.3', patch: 'openslide-pure-rs-no-c.patch' },
 ];
 
 for (const { crate, version, patch } of VENDORED) {
